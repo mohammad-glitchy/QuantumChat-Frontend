@@ -22,10 +22,11 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { COMPOSER_EMOJIS, QUICK_REACTIONS, isEmojiOnlyText, searchEmojis, splitEmojis } from '../utils/emojis.js';
 import { parseGroupPayload } from '../utils/groupPayload.js';
+import { getMessagePreviewText } from '../utils/messagePreview.js';
 import { detectTextDirection } from '../utils/scriptDirection.js';
 import AttachmentBubble from './AttachmentBubble.jsx';
 import GroupMessageContent from './GroupMessageContent.jsx';
-
+import LinkifiedText from './LinkifiedText.jsx';
 const MENU_GAP = 8;
 const VIEW_PAD = 12;
 
@@ -99,6 +100,17 @@ function ReadReceipt({ status }) {
     );
   }
 
+  if (status === 'waiting') {
+    return (
+      <span className="read-receipt sending" title="Waiting for connection">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+          <circle cx="12" cy="12" r="9" opacity="0.35" />
+          <path d="M12 7v5l3 2" />
+        </svg>
+      </span>
+    );
+  }
+
   if (status === 'sent') {
     return (
       <span className="read-receipt sent" title="Sent">
@@ -129,6 +141,7 @@ function MessageBubble({
   senderLabel,
   replyPreview,
   starred,
+  important = false,
   pinned,
   showReadReceipts = true,
   groupRecipientCount,
@@ -144,11 +157,14 @@ function MessageBubble({
   onJumpToReply,
   onImagePreview,
   onImageReady,
+  onVideoPreview,
+  onVideoReady,
   onOpenStory,
   onVotePoll,
   onBurnViewOnce,
   onShowInfo,
   onShowEditHistory,
+  onImportant,
 }) {
   const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -156,12 +172,14 @@ function MessageBubble({
   const [reactSearchOpen, setReactSearchOpen] = useState(false);
   const [reactQuery, setReactQuery] = useState('');
   const [coords, setCoords] = useState({ top: 0, left: 0, placement: 'below', ready: false });
+  const [justUnlocked, setJustUnlocked] = useState(false);
 
   const rootRef = useRef(null);
   const moreRef = useRef(null);
   const reactBtnRef = useRef(null);
   const popoverRef = useRef(null);
   const anchorRef = useRef(null);
+  const wasLockedRef = useRef(message.locked);
   const messageId = message.id || message._id;
   const reactionGroups = groupReactions(message.reactions);
   const myReaction = (message.reactions || []).find((r) => String(r.user) === String(currentUserId))?.emoji;
@@ -201,7 +219,37 @@ function MessageBubble({
     () => (emojiOnly ? splitEmojis(message.text) : []),
     [emojiOnly, message.text],
   );
-  const isDecryptionFail = message.text === null;
+    const isLockedCapsule = Boolean(message.timeCapsule && message.locked);
+  const isDecryptionFail = message.text === null && !isLockedCapsule;
+
+  const isVoiceMessage = useMemo(() => {
+    if (message.viewOnceMediaKind === 'audio') return true;
+    if (message.attachment) {
+      const mime = String(message.attachment.mimetype || '').toLowerCase();
+      const name = String(message.attachment.filename || '').toLowerCase();
+      if (
+        mime.startsWith('audio/') ||
+        /^voice-note/i.test(name) ||
+        /\.(mp3|m4a|wav|aac|ogg|oga|opus|flac)$/i.test(name) ||
+        (/\.webm$/i.test(name) && (/^voice-note/i.test(name) || mime.startsWith('audio/')))
+      ) {
+        return true;
+      }
+    }
+    if (message.group && structured?.type === 'file') {
+      const mime = String(structured.payload?.mimetype || '').toLowerCase();
+      const name = String(structured.payload?.filename || '').toLowerCase();
+      if (
+        mime.startsWith('audio/') ||
+        /^voice-note/i.test(name) ||
+        /\.(mp3|m4a|wav|aac|ogg|oga|opus|flac)$/i.test(name) ||
+        (/\.webm$/i.test(name) && (/^voice-note/i.test(name) || mime.startsWith('audio/')))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }, [message.attachment, message.group, structured, message.viewOnceMediaKind]);
 
   const callMeta = useMemo(() => {
     if (!message.text) return null;
@@ -330,6 +378,14 @@ function MessageBubble({
     const next = placePopover(anchor, popoverRef.current, { preferMine: isMine });
     setCoords({ ...next, ready: true });
   }
+  useEffect(() => {
+  if (wasLockedRef.current && !message.locked && message.timeCapsule) {
+    setJustUnlocked(true);
+    const t = setTimeout(() => setJustUnlocked(false), 2500);
+    return () => clearTimeout(t);
+  }
+  wasLockedRef.current = message.locked;
+}, [message.locked, message.timeCapsule]);
 
   useLayoutEffect(() => {
     if (!anyPopover) {
@@ -424,6 +480,12 @@ function MessageBubble({
                   />
                 </span>
                 <span>{starred ? t('chat.unstar', 'Unstar') : t('chat.star', 'Star')}</span>
+              </button>
+            )}
+            {onImportant && (
+              <button type="button" role="menuitem" onClick={() => { closeAll(); onImportant(messageId); }}>
+                <span className="message-menu-icon" aria-hidden="true"><Pin size={16} strokeWidth={2} /></span>
+                <span>{important ? 'Remove from important' : 'Save as important'}</span>
               </button>
             )}
             {onPin && (
@@ -523,9 +585,16 @@ function MessageBubble({
         animate={{ opacity: 1 }}
         transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
       >
-        <div className={`message-bubble-wrap ${isMine ? 'mine' : 'theirs'}`}>
+        <div className={`message-bubble-wrap ${isMine ? 'mine' : 'theirs'} ${justUnlocked ? 'capsule-unlocked-pop' : ''}`}>
+          {justUnlocked && (
+    <div className="capsule-unlock-alert" role="status">
+      <span className="capsule-sparkle-emoji">✨</span>
+      Time capsule unlocked!
+      <span className="capsule-sparkle-emoji">✨</span>
+    </div>
+  )}
           <div
-            className={`message-bubble ${isMine ? 'mine' : 'theirs'} ${grouped ? 'grouped' : ''}${message.expiresAt ? ' has-expiry' : ''}${isStoryReaction ? ' story-reaction-pill' : ''}${emojiOnly ? ' emoji-only' : ''}${textDir ? ` is-${textDir}` : ''}`}
+            className={`message-bubble ${isMine ? 'mine' : 'theirs'} ${grouped ? 'grouped' : ''}${isVoiceMessage ? ' is-voice' : ''}${message.expiresAt ? ' has-expiry' : ''}${isStoryReaction ? ' story-reaction-pill' : ''}${emojiOnly ? ' emoji-only' : ''}${textDir ? ` is-${textDir}` : ''}`}
             dir={textDir}
           >
             {senderLabel && !isMine && !grouped && (
@@ -539,12 +608,17 @@ function MessageBubble({
                 QuantumAI <span className="verified-ai-badge">AI</span>
               </div>
             )}
-            {(pinned || starred) && (
+            {(pinned || starred || important) && (
               <div className="message-flags">
                 {pinned && <span title="Pinned"><Pin size={12} /></span>}
                 {starred && (
                   <span title="Starred">
                     <Star size={12} fill="#FFC107" stroke="#FFC107" strokeWidth={0} />
+                  </span>
+                )}
+                {important && (
+                  <span title="Important">
+                    <Pin size={12} strokeWidth={2.2} />
                   </span>
                 )}
               </div>
@@ -555,6 +629,11 @@ function MessageBubble({
             {message.forwardedFrom?.username && (
               <div className="message-forwarded-label">Forwarded from {message.forwardedFrom.username}</div>
             )}
+            {message.timeCapsule && (
+              <div className="message-forwarded-label capsule-badge">
+                ⏳ Time capsule{message.unlocksAt ? ` · unlocks ${new Date(message.unlocksAt).toLocaleString()}` : ''}
+              </div>
+            )}
             {replyPreview && (
               <button
                 type="button"
@@ -563,17 +642,19 @@ function MessageBubble({
                 disabled={!onJumpToReply}
               >
                 <span className="message-reply-label">{replyPreview.label}</span>
-                <span className="message-reply-text">{replyPreview.text}</span>
+                <span className="message-reply-text">{getMessagePreviewText(replyPreview.text)}</span>
               </button>
             )}
            {(message.viewOnce && message.viewOnceOpenedAt) ||
   (message.attachment && structured.type !== 'file' && !isStoryReply) ? (
-              <AttachmentBubble
+               <AttachmentBubble
                 attachment={message.attachment}
                 isMine={isMine}
                 resolveSecretKey={keyResolver}
                 onImagePreview={onImagePreview}
                 onImageReady={onImageReady}
+                onVideoPreview={onVideoPreview}
+                onVideoReady={onVideoReady}
                 viewOnce={Boolean(message.viewOnce)}
                 viewOnceOpened={Boolean(message.viewOnceOpenedAt)}
                 viewOnceMediaKind={message.viewOnceMediaKind}
@@ -619,6 +700,8 @@ function MessageBubble({
                 isMine={isMine}
                 onImagePreview={onImagePreview}
                 onImageReady={onImageReady}
+                onVideoPreview={onVideoPreview}
+                onVideoReady={onVideoReady}
                 onBurnViewOnce={
                   onBurnViewOnce ? () => onBurnViewOnce(message) : undefined
                 }
@@ -666,16 +749,16 @@ function MessageBubble({
                     ) : null}
                   </div>
                 </button>
-                {storyReplyPayload.replyMediaKind === 'gif' ? (
-                  storyReplyPayload.gifUrl ? (
-                    // Legacy pre-encryption GIF replies — still stored as a plaintext URL
-                    <img
-                      src={storyReplyPayload.gifUrl}
-                      alt="GIF"
-                      loading="lazy"
-                      style={{ display: 'block', maxWidth: 220, maxHeight: 220, borderRadius: 10, marginTop: 6 }}
-                    />
-                  ) : message.attachment ? (
+                 {storyReplyPayload.replyMediaKind === 'gif' && storyReplyPayload.gifUrl ? (
+                  // Legacy pre-encryption GIF replies — still stored as a plaintext URL
+                  <img
+                    src={storyReplyPayload.gifUrl}
+                    alt="GIF"
+                    loading="lazy"
+                    style={{ display: 'block', maxWidth: 220, maxHeight: 220, borderRadius: 10, marginTop: 6 }}
+                  />
+                ) : ['gif', 'voice', 'image', 'video', 'file'].includes(storyReplyPayload.replyMediaKind) ? (
+                  message.attachment ? (
                     <AttachmentBubble
                       attachment={message.attachment}
                       isMine={isMine}
@@ -683,10 +766,12 @@ function MessageBubble({
                       onImagePreview={onImagePreview}
                       onImageReady={onImageReady}
                     />
-                  ) : null
-                ) : (
+                  ) : (
+                    <em dir="auto">[Attachment missing]</em>
+                  )
+                ) : storyReplyPayload.text ? (
                   <div>{storyReplyPayload.text}</div>
-                )}
+                ) : null}
               </div>
             ) : hasTextContent ? (
               emojiOnly ? (
@@ -710,9 +795,13 @@ function MessageBubble({
                   className={`message-text ${detectTextDirection(message.text) === 'rtl' ? 'is-rtl' : 'is-ltr'}`}
                   dir={detectTextDirection(message.text)}
                 >
-                  {message.text}
+                  <LinkifiedText text={message.text} />
                 </span>
               )
+            ) : isLockedCapsule ? (
+              <em dir="auto" className="capsule-locked">
+                🔒 Time capsule — unlocks {new Date(message.unlocksAt).toLocaleString()}
+              </em>
             ) : isDecryptionFail ? (
               <em dir="auto">[Unable to decrypt message]</em>
             ) : null}
@@ -743,9 +832,9 @@ function MessageBubble({
             <button
               ref={moreRef}
               type="button"
-              className={`message-more-btn ${anyPopover ? 'visible' : ''}`}
+              className={`message-more-btn ${anyPopover ? 'visible' : ''} ${menuOpen ? 'active' : ''}`}
               aria-label="Message options"
-              aria-expanded={anyPopover}
+              aria-expanded={menuOpen}
               onClick={() => {
                 anchorRef.current = moreRef.current;
                 setMenuOpen((v) => !v);

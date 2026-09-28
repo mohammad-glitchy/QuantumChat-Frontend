@@ -9,11 +9,6 @@ function hashUsername(name) {
   return Math.abs(hash) % 10;
 }
 
-function isRecentlyActive(iso) {
-  if (!iso) return false;
-  return Date.now() - new Date(iso).getTime() < 5 * 60 * 1000;
-}
-
 function formatShortLastSeen(iso) {
   if (!iso) return 'offline';
   const diff = Date.now() - new Date(iso).getTime();
@@ -56,7 +51,7 @@ export default function UserList({
   return (
     <div className="user-list">
       {users.map((u) => {
-        const online = !u.isSystemUser && (onlineUsers.has(u.id) || isRecentlyActive(u.lastLoginAt));
+        const online = !u.isSystemUser && onlineUsers.has(u.id);
         const unread = unreadCounts[u.id] || 0;
         const lastMsg = lastMessages[u.id];
 

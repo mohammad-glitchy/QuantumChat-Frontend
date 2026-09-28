@@ -154,9 +154,8 @@ useEffect(() => {
     document.removeEventListener('visibilitychange', onVisible);
   };
 }, [user?.id]);
-
   const register = useCallback(
-    async ({ username, email, password, dateOfBirth, timezone, preferredLanguage }) => {
+    async ({ username, email, password, dateOfBirth, timezone, preferredLanguage, referralCode }) => {
       const keySet = generateKeySet();
       const publicKeys = keySet.map((k) => k.publicKey);
       // Validate localStorage works before creating a server account whose keys we must store here.
@@ -176,6 +175,7 @@ useEffect(() => {
         dateOfBirth: dateOfBirth || undefined,
         timezone,
         preferredLanguage: preferredLanguage || undefined,
+        referralCode: referralCode || undefined,
       });
       const { token, user: newUser } = data.data;
 

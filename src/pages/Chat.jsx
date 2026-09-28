@@ -5,6 +5,7 @@ import {
   Bookmark,
   HelpCircle,
   Info,
+  LayoutDashboard,
   MessageSquare,
   Mic,
   Phone,
@@ -21,9 +22,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { getDisplayName } from "../utils/getDisplayName.js";
 import { streamQuantumAI } from "../api/aiClient.js";
-import { fetchChatTheme, fetchThemeCatalog, fetchWallpaperImageUrl } from '../api/chatThemes.js';
+import { fetchChatTheme, fetchGroupChatTheme, fetchGroupWallpaperImageUrl, fetchThemeCatalog, fetchWallpaperImageUrl } from '../api/chatThemes.js';
 import client, { muteChat, unmuteChat } from "../api/client.js";
 import { postPresenceHeartbeat } from "../api/presence.js";
 import { connectSocket, getSocket } from "../api/socket.js";
@@ -42,6 +42,7 @@ import MediaSendPreview from "../components/chat/MediaSendPreview.jsx";
 import MessageActionSheet from "../components/chat/MessageActionSheet.jsx";
 import SwipeableMessage from "../components/chat/SwipeableMessage.jsx";
 import ChatThemeModal from '../components/ChatThemeModal.jsx';
+import ClearChatModal from "../components/ClearChatModal.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import CreateGroupModal from "../components/CreateGroupModal.jsx";
 import DateSeparator from "../components/DateSeparator.jsx";
@@ -50,12 +51,14 @@ import EditHistoryModal from "../components/EditHistoryModal.jsx";
 import EmojiPicker from "../components/EmojiPicker.jsx";
 import ForwardModal from "../components/ForwardModal.jsx";
 import GroupSettingsModal from "../components/GroupSettingsModal.jsx";
+import GroupCommandCenter from "../components/GroupCommandCenter.jsx";
 import ImageLightbox from "../components/ImageLightbox.jsx";
 import MeetingOverlay from "../components/MeetingOverlay.jsx";
 import MessageInfoModal from "../components/MessageInfoModal.jsx";
 import MessageSearch from "../components/MessageSearch.jsx";
 import SettingsModal from "../components/SettingsModal.jsx";
 import StarredMessagesModal from "../components/StarredMessagesModal.jsx";
+import TimeCapsuleModal from "../components/TimeCapsuleModal.jsx";
 import { useToast } from "../components/ToastProvider.jsx";
 import TypingIndicator from "../components/TypingIndicator.jsx";
 import BottomSheet from "../components/ui/BottomSheet.jsx";
@@ -66,6 +69,7 @@ import VaultUnlockModal from "../components/VaultUnlockModal.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useNotificationSettings } from "../context/NotificationSettingsContext.jsx";
 import { useVault } from "../context/VaultContext.jsx";
+import { sealBytesAsync, secretboxSealAsync } from "../crypto/encryptFileAsync.js";
 import {
   downloadKeyFile,
   formatKeyFile,
@@ -73,15 +77,14 @@ import {
 } from "../crypto/keyFile.js";
 import {
   pickRandom,
-  sealBytes,
   sealMessage,
-  secretboxSeal,
-  unsealMessage,
+  unsealMessage
 } from "../crypto/keys.js";
 import {
   findSecretKeyForPublicKey,
   getCurrentKeySet,
 } from "../crypto/keyStorage.js";
+import { compressVideo } from "../crypto/videoCompressor.js";
 import {
   attachmentIdOf,
   normalizeAttachment,
@@ -92,22 +95,33 @@ import { useScreenshotProtection } from "../hooks/useScreenshotProtection.js";
 import useWebRTCCall from "../hooks/useWebRTCCall.js";
 import { getWallpaperBackground, getWallpaperFx, preloadWallpaper } from '../theme/wallpaperBackgrounds.js';
 import activityStore from "../utils/activityStore.js";
+import { getOfflineMedia, removeOfflineMedia, saveOfflineMedia, updateOfflineMedia } from "../utils/offlineMediaQueue.js";
+import {
+  getAllOfflineMessages,
+  getOfflineMessages,
+  removeOfflineMessage,
+  saveOfflineMessage,
+} from "../utils/offlineMessageQueue.js";
 import {
   getArchivedChatKeys,
+  getChatDraft,
   getInfoPanelOpen,
-  getLastQuickReaction,
   getMutedChatKeys,
+  getPinnedChatKeys,
   isChatMuted,
+  saveChatDraft,
   setInfoPanelOpen,
   setLastQuickReaction,
   toggleArchiveChat,
   toggleMuteChat,
+  togglePinChat
 } from "../utils/chatPrefs.js";
 import {
   chatPathForSelection,
   selectionFromParams,
 } from "../utils/chatRoutes.js";
 import { updateFaviconBadge } from "../utils/faviconBadge.js";
+import { getDisplayName } from "../utils/getDisplayName.js";
 import {
   encodeAnnouncement,
   encodeEvent,
@@ -122,14 +136,24 @@ import {
   unhideChat,
 } from "../utils/hiddenChats.js";
 import {
+  clearAllStarred,
+  clearAutoImportantRemoval,
   deleteMessageForMe,
+  getAutoImportantRemovedIds,
   getDeletedForMeIds,
   getPinnedIds,
   getStarredEntries,
   getStarredIds,
+  rememberAutoImportantRemoval,
+  restoreStarredEntries,
   togglePinnedMessage,
   toggleStarredMessage,
 } from "../utils/messageExtras.js";
+import {
+  getAutomaticImportantSource,
+  isAutomaticImportantMessage,
+} from "../utils/importantMessages.js";
+import { getMessagePreviewText } from "../utils/messagePreview.js";
 import {
   buildGroupedNotificationText,
   playNotificationSound,
@@ -148,22 +172,21 @@ import {
   setConversationActivity,
 } from "../utils/readState.js";
 import { shouldEnforceScreenshotProtection } from "../utils/screenshotProtection.js";
+import { formatLastSeen } from "../utils/formatLastSeen.js";
 import { playReceiveSound, playSendSound, startIncomingRingSound, unlockAudio } from "../utils/sounds.js";
+
 const DEFAULT_CHAT_THEME = { presetId: 'default', bubbleColorId: 'default', wallpaperId: 'none' };
 
 const MAX_VOICE_SECONDS = 60;
-const ACTIVE_WINDOW_MS = 5 * 60 * 1000;
-const MAX_FILE_SIZE = 15 * 1024 * 1024; // 15 MB
+const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB — matches backend MAX_ATTACHMENT_SIZE
+// Ciphertext above this size uploads in sequential chunks instead of one
+// request body — must match backend CHUNK_SIZE in middleware/upload.js.
+const CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB
 
-function isRecentlyActive(iso) {
-  if (!iso) return false;
-  return Date.now() - new Date(iso).getTime() < ACTIVE_WINDOW_MS;
-}
-
-function formatLastSeen(iso) {
-  if (!iso) return "never logged in";
-  if (isRecentlyActive(iso)) return "online";
-  return `last seen ${new Date(iso).toLocaleString()}`;
+/** Never invent "online" from a timestamp — only real presence may say online. */
+function formatLastSeenLabel(iso) {
+  if (!iso) return "last seen recently";
+  return formatLastSeen(iso);
 }
 
 function formatVoiceTimer(seconds) {
@@ -201,7 +224,7 @@ function isMediaPreviewFile(file) {
   if (mime === 'image/svg+xml' || name.endsWith('.svg')) return false;
   if (mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp)$/i.test(name)) return true;
   if (mime.startsWith('video/') || /\.(mp4|webm|mov|mkv|avi)$/i.test(name)) return true;
-  if (mime.startsWith('audio/') ||/\.(webm|ogg|mp3|m4a|wav|aac)$/i.test(name) ||/^voice-note/i.test(name)) {
+  if (mime.startsWith('audio/') || /\.(webm|ogg|mp3|m4a|wav|aac)$/i.test(name) || /^voice-note/i.test(name)) {
     return true;
   }
   return false;
@@ -231,6 +254,20 @@ function isSameDay(d1, d2) {
   );
 }
 
+/** Whether a message belongs to a Clear-chat scope bucket. */
+function messageMatchesClearScope(message, scope) {
+  if (scope === "all") return true;
+  const category = message?.mediaCategory;
+  const hasAttachment = Boolean(
+    message?.attachment &&
+      (typeof message.attachment === "object"
+        ? message.attachment.id || message.attachment._id
+        : message.attachment),
+  );
+  if (scope === "text") return !category && !hasAttachment;
+  return category === scope;
+}
+
 export default function Chat() {
   const { t, i18n } = useTranslation();
   const {
@@ -244,7 +281,7 @@ export default function Chat() {
     updateSessionUser,
   } = useAuth();
   const { showToast } = useToast();
-const { isUnlocked: vaultUnlocked, isPeerVaulted, vaultEnabled, addPeer: addVaultPeer, removePeer: removeVaultPeer, lock: lockVault } = useVault();
+  const { isUnlocked: vaultUnlocked, isPeerVaulted, vaultEnabled, addPeer: addVaultPeer, removePeer: removeVaultPeer, lock: lockVault } = useVault();
   const [showVaultSetup, setShowVaultSetup] = useState(false);
   const [showVaultUnlock, setShowVaultUnlock] = useState(false);
   const [pendingVaultPeerId, setPendingVaultPeerId] = useState(null);
@@ -284,8 +321,13 @@ const { isUnlocked: vaultUnlocked, isPeerVaulted, vaultEnabled, addPeer: addVaul
   const [archivedKeys, setArchivedKeys] = useState(() =>
     getArchivedChatKeys(user?.id),
   );
+  const [pinnedChatKeys, setPinnedChatKeys] = useState(() =>
+    getPinnedChatKeys(user?.id),
+  );
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
+  const [clearChatOpen, setClearChatOpen] = useState(false);
+  const [clearChatBusy, setClearChatBusy] = useState(false);
   const [activityTick, setActivityTick] = useState(0);
   const [friendCandidates, setFriendCandidates] = useState([]);
   const [friendCandidatesLoading, setFriendCandidatesLoading] = useState(false);
@@ -302,16 +344,18 @@ const { isUnlocked: vaultUnlocked, isPeerVaulted, vaultEnabled, addPeer: addVaul
   const [isDragging, setIsDragging] = useState(false);
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const [peerTyping, setPeerTyping] = useState(false);
-  const [groupTypingNames, setGroupTypingNames] = useState([]);
+  const [groupTypingUsers, setGroupTypingUsers] = useState([]);
   const [onlineUserIds, setOnlineUserIds] = useState(() => new Set());
   const [deletedForMeIds, setDeletedForMeIds] = useState(() =>
     getDeletedForMeIds(user?.id),
   );
   const [starredIds, setStarredIds] = useState(() => getStarredIds(user?.id));
+  const [importantEntries, setImportantEntries] = useState([]);
+  const [importantLoading, setImportantLoading] = useState(false);
   const [showStarredMessages, setShowStarredMessages] = useState(false);
   const [showChatMedia, setShowChatMedia] = useState(false);
-const [starredScope, setStarredScope] = useState('all'); // 'all' | 'chat'
-const [pendingJumpMessageId, setPendingJumpMessageId] = useState(null);
+  const [starredScope, setStarredScope] = useState('all'); // 'all' | 'chat'
+  const [pendingJumpMessageId, setPendingJumpMessageId] = useState(null);
   const [pinnedIds, setPinnedIds] = useState([]);
   const [forwardMessage, setForwardMessage] = useState(null);
   const [forwardBusy, setForwardBusy] = useState(false);
@@ -321,12 +365,20 @@ const [pendingJumpMessageId, setPendingJumpMessageId] = useState(null);
   const [uploads, setUploads] = useState([]);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [disappearSeconds, setDisappearSeconds] = useState(0);
+  const importantEntriesRef = useRef([]);
+  const [capsuleUnlocksAt, setCapsuleUnlocksAt] = useState("");
+  const [showCapsulePicker, setShowCapsulePicker] = useState(false);
   const [mediaPreview, setMediaPreview] = useState(null);
   const [mediaPreviewSending, setMediaPreviewSending] = useState(false);
+  const [mediaCompressing, setMediaCompressing] = useState(false);
+  const [mediaCompressProgress, setMediaCompressProgress] = useState(0);
+  const [mediaCompressPhase, setMediaCompressPhase] = useState('encoding');
+  const [videoPlayer, setVideoPlayer] = useState(null);
   const [allowForward, setAllowForward] = useState(true);
   const [forwardUntilSeconds, setForwardUntilSeconds] = useState(0);
   const [gallery, setGallery] = useState(null);
   const [showGroupSettings, setShowGroupSettings] = useState(false);
+  const [showCommandCenter, setShowCommandCenter] = useState(false);
   const [profileUserId, setProfileUserId] = useState(null);
   const [groupComposerMenu, setGroupComposerMenu] = useState(null);
   const [pollDraft, setPollDraft] = useState(null);
@@ -341,10 +393,10 @@ const [pendingJumpMessageId, setPendingJumpMessageId] = useState(null);
   const [composerHelpOpen, setComposerHelpOpen] = useState(false);
   const [composerPlusOpen, setComposerPlusOpen] = useState(false);
   const [gifPickerOpen, setGifPickerOpen] = useState(false);
-const [gifQuery, setGifQuery] = useState('');
-const [gifResults, setGifResults] = useState([]);
-const [gifLoading, setGifLoading] = useState(false);
-const [gifSending, setGifSending] = useState(false);
+  const [gifQuery, setGifQuery] = useState('');
+  const [gifResults, setGifResults] = useState([]);
+  const [gifLoading, setGifLoading] = useState(false);
+  const [gifSending, setGifSending] = useState(false);
   const [infoPanelOpen, setInfoPanelOpenState] = useState(() =>
     getInfoPanelOpen(),
   );
@@ -375,6 +427,18 @@ const [gifSending, setGifSending] = useState(false);
   const [searchResults, setSearchResults] = useState(null); // null = not searching
   const [searchLoading, setSearchLoading] = useState(false);
   const searchDebounceRef = useRef(null);
+  const draftConversationKeyRef = useRef(null);
+  const draftReadyConversationKeyRef = useRef(null);
+
+  useEffect(() => {
+    if (
+      !user?.id ||
+      !draftConversationKeyRef.current ||
+      draftReadyConversationKeyRef.current !== draftConversationKeyRef.current
+    ) return;
+    void saveChatDraft(user.id, draftConversationKeyRef.current, draft);
+  }, [draft, user?.id]);
+
   useEffect(() => {
     const mqMobile = window.matchMedia("(max-width: 768px)");
     const mqCompact = window.matchMedia("(max-width: 1023px)");
@@ -389,7 +453,7 @@ const [gifSending, setGifSending] = useState(false);
       mqCompact.removeEventListener?.("change", syncCompact);
     };
   }, []);
- // Screen-time tracking is session-level now — see ScreenTimeTracker.jsx,
+  // Screen-time tracking is session-level now — see ScreenTimeTracker.jsx,
   // mounted once above <Routes> in App.jsx so it survives navigation
   // between /chat, /chat/activity, etc.
   useEffect(() => {
@@ -408,17 +472,18 @@ const [gifSending, setGifSending] = useState(false);
       .catch(() => { }); // Non-critical — the picker just won't open without it; chat still works.
   }, [hasLocalKeyring]);
 
-  useEffect(() => {
+ useEffect(() => {
     setThemeModalOpen(false);
 
-    if (!selected || selected.type !== "dm") {
+    if (!selected || (selected.type !== "dm" && selected.type !== "group")) {
       setChatTheme(DEFAULT_CHAT_THEME);
       return;
     }
 
     let cancelled = false;
+    const fetcher = selected.type === "group" ? fetchGroupChatTheme : fetchChatTheme;
 
-    fetchChatTheme(selected.id).then((theme) => {
+    fetcher(selected.id).then((theme) => {
       if (!cancelled) {
         setChatTheme(theme);
       }
@@ -432,10 +497,10 @@ const [gifSending, setGifSending] = useState(false);
   // The custom wallpaper endpoint returns raw bytes (auth-gated, owner-only)
   // rather than a public URL, so it has to be fetched as a blob and turned
   // into an object URL, same as attachment previews elsewhere in this app.
-  useEffect(() => {
+useEffect(() => {
     if (
       !selected ||
-      selected.type !== "dm" ||
+      (selected.type !== "dm" && selected.type !== "group") ||
       chatTheme.wallpaperId !== "custom"
     ) {
       setCustomWallpaperUrl(null);
@@ -444,8 +509,9 @@ const [gifSending, setGifSending] = useState(false);
 
     let cancelled = false;
     let urlToRevoke = null;
+    const fetchUrl = selected.type === "group" ? fetchGroupWallpaperImageUrl : fetchWallpaperImageUrl;
 
-    fetchWallpaperImageUrl(selected.id).then((url) => {
+    fetchUrl(selected.id).then((url) => {
       if (cancelled) {
         URL.revokeObjectURL(url);
         return;
@@ -466,22 +532,22 @@ const [gifSending, setGifSending] = useState(false);
   useEffect(() => {
     if (chatTheme?.wallpaperId) preloadWallpaper(chatTheme.wallpaperId);
   }, [chatTheme.wallpaperId]);
-useEffect(() => {
-  if (!gifPickerOpen) return undefined;
-  const q = gifQuery.trim() || 'trending';
-  const timer = setTimeout(async () => {
-    setGifLoading(true);
-    try {
-      const { data } = await client.get('/gifs/search', { params: { q } });
-      setGifResults(data.data || []);
-    } catch {
-      setGifResults([]);
-    } finally {
-      setGifLoading(false);
-    }
-  }, 350);
-  return () => clearTimeout(timer);
-}, [gifPickerOpen, gifQuery]);
+  useEffect(() => {
+    if (!gifPickerOpen) return undefined;
+    const q = gifQuery.trim() || 'trending';
+    const timer = setTimeout(async () => {
+      setGifLoading(true);
+      try {
+        const { data } = await client.get('/gifs/search', { params: { q } });
+        setGifResults(data.data || []);
+      } catch {
+        setGifResults([]);
+      } finally {
+        setGifLoading(false);
+      }
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [gifPickerOpen, gifQuery]);
   const messageListRef = useRef(null);
   const bottomRef = useRef(null);
   const typingPeerTimeoutRef = useRef(null);
@@ -505,16 +571,55 @@ useEffect(() => {
   const recordStartedAtRef = useRef(0);
   const notifiedCallIdRef = useRef(null);
   const dragCountRef = useRef(0);
-  const imageSrcMapRef = useRef(new Map());
+   const imageSrcMapRef = useRef(new Map());
+  const videoSrcMapRef = useRef(new Map());
   const aiAbortRef = useRef(null);
   const usersRef = useRef([]);
   const groupsRef = useRef([]);
   const storiesRailRef = useRef(null);
+  const retryingOutboxRef = useRef(new Set());
   selectedRef.current = selected;
   userRef.current = user;
   messagesRef.current = messages;
   usersRef.current = users;
   groupsRef.current = groups;
+
+  function stopTyping({ emit = true } = {}) {
+    clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = null;
+    const target = presenceTypingRef.current;
+    presenceTypingRef.current = { to: null, groupId: null };
+    if (!emit || (!target.to && !target.groupId)) return;
+    const socket = getSocket();
+    if (!socket?.connected) return;
+    socket.emit(
+      "typing:stop",
+      target.to ? { to: target.to } : { groupId: target.groupId },
+    );
+  }
+
+  function pendingMessageFromOutbox(entry) {
+    return {
+      id: `outbox-${entry.id}`,
+      _id: `outbox-${entry.id}`,
+      from: user.id,
+      ...(entry.type === "group" ? { group: entry.conversationId } : { to: entry.conversationId }),
+      text: entry.displayText,
+      createdAt: entry.queuedAt,
+      _status: "waiting",
+      _pending: true,
+      replyTo: entry.replyTo || null,
+    };
+  }
+
+  function syncTypingPrivacy() {
+    const socket = getSocket();
+    if (socket?.connected) {
+      socket.emit("privacy:typing-indicator", {
+        enabled: userRef.current?.privacy?.typingIndicator !== false,
+      });
+    }
+  }
 
   const resolveActivityActor = useCallback((actorId) => {
     if (actorId == null) return {};
@@ -590,94 +695,94 @@ useEffect(() => {
       }
     },
   });
-  
+
   // Sends a reply typed directly into a notification's inline text field,
   // entirely in the background — no navigation, no window focus, no change
   // to whatever the user is currently looking at. Standalone rather than
   // reusing handleSend()/selected/draft, since those are tied to the
   // CURRENTLY VISIBLE conversation. Only handles the plain-DM case, since
   // that's the only path the backend currently attaches a Reply action to.
-     async function sendReplyInBackground(peerId, text) {
-      const trimmed = (text || '').trim();
+  async function sendReplyInBackground(peerId, text) {
+    const trimmed = (text || '').trim();
     console.log('[reply] sendReplyInBackground called', { peerId, textLength: trimmed.length });
     if (!trimmed || !peerId) {
       console.warn('[reply] aborting: missing text or peerId', { trimmed, peerId });
       return;
     }
+    try {
+      let replyPeer =
+        String(peerId) === String(user.id)
+          ? selfPeer
+          : users.find((u) => String(u.id) === String(peerId));
+
+      if (!replyPeer?.publicKeys?.length) {
+        console.log('[reply] peer not found/no keys in local users list, fetching fresh:', peerId);
         try {
-        let replyPeer =
-          String(peerId) === String(user.id)
-            ? selfPeer
-            : users.find((u) => String(u.id) === String(peerId));
-  
-        if (!replyPeer?.publicKeys?.length) {
-          console.log('[reply] peer not found/no keys in local users list, fetching fresh:', peerId);
-          try {
-            const { data } = await client.get(`/users/${peerId}`);
-            replyPeer = data?.data || null;
-          } catch (fetchErr) {
-            console.error('[reply] failed to fetch peer directly', fetchErr);
-          }
+          const { data } = await client.get(`/users/${peerId}`);
+          replyPeer = data?.data || null;
+        } catch (fetchErr) {
+          console.error('[reply] failed to fetch peer directly', fetchErr);
         }
-
-        const myKey = pickRandom(getCurrentKeySet(user.id));
-        const recipientKeys = (replyPeer?.publicKeys || []).filter(Boolean);
-        console.log('[reply] resolved peer', { found: Boolean(replyPeer), recipientKeyCount: recipientKeys.length, haveOwnKey: Boolean(myKey?.publicKey) });
-        if (!myKey?.publicKey || recipientKeys.length === 0) {
-          console.error('[reply] aborting: missing encryption keys', { hasMyKey: Boolean(myKey?.publicKey), recipientKeyCount: recipientKeys.length });
-          showToast('Missing encryption keys for this conversation', 'error');
-          return;
-        }
-        const forRecipient = sealMessage(trimmed, pickRandom(recipientKeys));
-        const forSender = sealMessage(trimmed, myKey.publicKey);
-        console.log('[reply] posting message to server...');
-        const { data } = await client.post('/messages', { to: peerId, forRecipient, forSender });
-        console.log('[reply] sent successfully', data?.data?._id || data?.data?.id);
-        recordActivityFromMessage(data.data);
-      } catch (err) {
-        console.error('[reply] send failed', err);
-        showToast(err.response?.data?.error || err.message || 'Failed to send reply', 'error');
       }
+
+      const myKey = pickRandom(getCurrentKeySet(user.id));
+      const recipientKeys = (replyPeer?.publicKeys || []).filter(Boolean);
+      console.log('[reply] resolved peer', { found: Boolean(replyPeer), recipientKeyCount: recipientKeys.length, haveOwnKey: Boolean(myKey?.publicKey) });
+      if (!myKey?.publicKey || recipientKeys.length === 0) {
+        console.error('[reply] aborting: missing encryption keys', { hasMyKey: Boolean(myKey?.publicKey), recipientKeyCount: recipientKeys.length });
+        showToast('Missing encryption keys for this conversation', 'error');
+        return;
+      }
+      const forRecipient = sealMessage(trimmed, pickRandom(recipientKeys));
+      const forSender = sealMessage(trimmed, myKey.publicKey);
+      console.log('[reply] posting message to server...');
+      const { data } = await client.post('/messages', { to: peerId, forRecipient, forSender });
+      console.log('[reply] sent successfully', data?.data?._id || data?.data?.id);
+      recordActivityFromMessage(data.data);
+    } catch (err) {
+      console.error('[reply] send failed', err);
+      showToast(err.response?.data?.error || err.message || 'Failed to send reply', 'error');
     }
-   
-     // ---- Notification action handling (Reply / Mark as Read / call actions) ---
-     const [notificationAction, setNotificationAction] = useState(null);
-   
-     // Path A — cold boot via openWindow(), action arrives as query params.
-     useEffect(() => {
-       const searchParams = new URLSearchParams(location.search);
-       if (searchParams.has('reply')) {
-         const raw = searchParams.get('reply');
-         const typed = raw && raw !== '1' ? decodeURIComponent(raw) : '';
-         setNotificationAction({ type: 'reply', text: typed });
-         navigate(location.pathname, { replace: true });
-       } else if (searchParams.has('acceptCall')) {
-         setNotificationAction({ type: 'accept_call', callId: searchParams.get('acceptCall') });
-         navigate(location.pathname, { replace: true });
-       } else if (searchParams.has('declineCall')) {
-         setNotificationAction({ type: 'decline_call', callId: searchParams.get('declineCall') });
-         navigate(location.pathname, { replace: true });
-       }
-       // eslint-disable-next-line react-hooks/exhaustive-deps
-     }, [location.search]);
+  }
 
-       const navigateRef = useRef(navigate);
-       navigateRef.current = navigate;
-       const locationRef = useRef(location);
-       locationRef.current = location;
+  // ---- Notification action handling (Reply / Mark as Read / call actions) ---
+  const [notificationAction, setNotificationAction] = useState(null);
 
-     useEffect(() => {
-       function onSwMessage(event) {
-         const msg = event.data;
-         if (!msg || msg.type !== 'quantumchat-notification-action') return;
-         console.log('[reply] received SW message', msg);
-   
-         if (msg.action === 'reply' && msg.text) {
-           sendReplyInBackground(msg.peerId, msg.text);
-           return;
-         }
-   
-        if (msg.url) {
+  // Path A — cold boot via openWindow(), action arrives as query params.
+  useEffect(() => {
+    const searchParams = new URLSearchParams(location.search);
+    if (searchParams.has('reply')) {
+      const raw = searchParams.get('reply');
+      const typed = raw && raw !== '1' ? decodeURIComponent(raw) : '';
+      setNotificationAction({ type: 'reply', text: typed });
+      navigate(location.pathname, { replace: true });
+    } else if (searchParams.has('acceptCall')) {
+      setNotificationAction({ type: 'accept_call', callId: searchParams.get('acceptCall') });
+      navigate(location.pathname, { replace: true });
+    } else if (searchParams.has('declineCall')) {
+      setNotificationAction({ type: 'decline_call', callId: searchParams.get('declineCall') });
+      navigate(location.pathname, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.search]);
+
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+  const locationRef = useRef(location);
+  locationRef.current = location;
+
+  useEffect(() => {
+    function onSwMessage(event) {
+      const msg = event.data;
+      if (!msg || msg.type !== 'quantumchat-notification-action') return;
+      console.log('[reply] received SW message', msg);
+
+      if (msg.action === 'reply' && msg.text) {
+        sendReplyInBackground(msg.peerId, msg.text);
+        return;
+      }
+
+      if (msg.url) {
         const targetPath = msg.url.split('?')[0];
         if (locationRef.current.pathname !== targetPath) navigateRef.current(targetPath);
       }
@@ -695,68 +800,68 @@ useEffect(() => {
       console.log('[reply] SW message listener detached');
       navigator.serviceWorker?.removeEventListener('message', onSwMessage);
     };
-       // eslint-disable-next-line react-hooks/exhaustive-deps
-     }, []);
-   
-     // Executes whatever `notificationAction` currently holds (Path A only, or
-     // Path B's non-silent cases), once it's actually safe to: the right
-     // conversation must be loaded, and for a reply with text, the recipient's
-     // public key must actually be available.
-     const pendingAutoSendRef = useRef(false);
-     useEffect(() => {
-       if (!notificationAction) return;
-   
-       if (notificationAction.type === 'reply') {
-         const targetId = params.groupId || params.peerId;
-         const selectedMatches = selected && String(selected.id) === String(targetId);
-         const peerReady =
-           selectedMatches &&
-           (selected.type === 'group' || Boolean(resolveDmPeer(selected)?.publicKeys?.length));
-   
-         if (!notificationAction.text) {
-           if (selectedMatches || selected) {
-             textareaRef.current?.focus();
-             setNotificationAction(null);
-           }
-           return;
-         }
-         if (peerReady) {
-           setDraft(notificationAction.text);
-           pendingAutoSendRef.current = true;
-           setNotificationAction(null);
-         }
-         return;
-       }
-   
-       if (
-         notificationAction.type === 'accept_call' &&
-         webrtc.call &&
-         String(webrtc.call.callId || webrtc.call.id) === String(notificationAction.callId)
-       ) {
-         webrtc.acceptCall().catch(() => showToast('Could not access microphone/camera', 'error'));
-         setNotificationAction(null);
-         return;
-       }
-   
-       if (
-         notificationAction.type === 'decline_call' &&
-         webrtc.call &&
-         String(webrtc.call.callId || webrtc.call.id) === String(notificationAction.callId)
-       ) {
-         webrtc.rejectCall();
-         setNotificationAction(null);
-       }
-       // eslint-disable-next-line react-hooks/exhaustive-deps
-     }, [notificationAction, selected, users, webrtc.call, params.peerId, params.groupId]);
-   
-     useEffect(() => {
-       if (pendingAutoSendRef.current && draft) {
-         pendingAutoSendRef.current = false;
-         handleSend({ preventDefault: () => {} });
-       }
-       // eslint-disable-next-line react-hooks/exhaustive-deps
-     }, [draft]);
-    
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Executes whatever `notificationAction` currently holds (Path A only, or
+  // Path B's non-silent cases), once it's actually safe to: the right
+  // conversation must be loaded, and for a reply with text, the recipient's
+  // public key must actually be available.
+  const pendingAutoSendRef = useRef(false);
+  useEffect(() => {
+    if (!notificationAction) return;
+
+    if (notificationAction.type === 'reply') {
+      const targetId = params.groupId || params.peerId;
+      const selectedMatches = selected && String(selected.id) === String(targetId);
+      const peerReady =
+        selectedMatches &&
+        (selected.type === 'group' || Boolean(resolveDmPeer(selected)?.publicKeys?.length));
+
+      if (!notificationAction.text) {
+        if (selectedMatches || selected) {
+          textareaRef.current?.focus();
+          setNotificationAction(null);
+        }
+        return;
+      }
+      if (peerReady) {
+        setDraft(notificationAction.text);
+        pendingAutoSendRef.current = true;
+        setNotificationAction(null);
+      }
+      return;
+    }
+
+    if (
+      notificationAction.type === 'accept_call' &&
+      webrtc.call &&
+      String(webrtc.call.callId || webrtc.call.id) === String(notificationAction.callId)
+    ) {
+      webrtc.acceptCall().catch(() => showToast('Could not access microphone/camera', 'error'));
+      setNotificationAction(null);
+      return;
+    }
+
+    if (
+      notificationAction.type === 'decline_call' &&
+      webrtc.call &&
+      String(webrtc.call.callId || webrtc.call.id) === String(notificationAction.callId)
+    ) {
+      webrtc.rejectCall();
+      setNotificationAction(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notificationAction, selected, users, webrtc.call, params.peerId, params.groupId]);
+
+  useEffect(() => {
+    if (pendingAutoSendRef.current && draft) {
+      pendingAutoSendRef.current = false;
+      handleSend({ preventDefault: () => { } });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft]);
+
   useEffect(() => {
     const call = webrtc.call;
     if (!call || call.role !== "callee" || call.status !== "incoming") return;
@@ -995,6 +1100,112 @@ useEffect(() => {
     },
     [user, resolveMySecretKey],
   );
+
+  // Refs so Important-messages mapping can use latest directory/decrypt
+  // helpers without re-fetching (and re-toasting) every time users/groups change.
+  const importantDecorateRef = useRef(decorate);
+  importantDecorateRef.current = decorate;
+  const importantUsersRef = useRef(users);
+  importantUsersRef.current = users;
+  const importantGroupsRef = useRef(groups);
+  importantGroupsRef.current = groups;
+
+  const loadImportantMessages = useCallback(async () => {
+    if (!user?.id) return;
+    setImportantLoading(true);
+    try {
+      const { data } = await client.get('/messages/important');
+      const markedAtById = new Map(
+        (data?.data?.entries || []).map((entry) => [String(entry.messageId), entry.markedAt]),
+      );
+      const directoryUsers = importantUsersRef.current;
+      const directoryGroups = importantGroupsRef.current;
+      const next = (data?.data?.messages || []).map((raw) => {
+        const message = importantDecorateRef.current(raw);
+        const messageId = String(message.id || message._id);
+        const groupId = raw.group ? String(raw.group) : null;
+        const group = groupId
+          ? directoryGroups.find((candidate) => String(candidate.id) === groupId)
+          : null;
+        const peerId = raw.group
+          ? groupId
+          : String(raw.from) === String(user.id) ? raw.to : raw.from;
+        const peer = peerId
+          ? directoryUsers.find((candidate) => String(candidate.id) === String(peerId))
+          : null;
+        const type = groupId ? 'group' : 'dm';
+        const title = group?.name || getDisplayName(peer, i18n.language) || 'Chat';
+        return {
+          ...message,
+          id: messageId,
+          type,
+          conversationId: groupId || peerId,
+          conversationKey: groupId ? conversationKeyForGroup(groupId) : conversationKeyForUser(peerId),
+          title,
+          from: raw.from,
+          createdAt: raw.createdAt,
+          hasAttachment: Boolean(message.attachment),
+          attachmentFilename: message.attachment?.filename || null,
+          important: true,
+          isImportant: true,
+          importantAt: markedAtById.get(messageId) || null,
+        };
+      });
+      setImportantEntries(next);
+    } catch (err) {
+      setImportantEntries([]);
+      // Background prefetch — never surface raw validation noise like
+      // "Invalid user id" (happens when an older API treats "important" as a
+      // peer id). Chat itself still works.
+      const status = err.response?.status;
+      const msg = err.response?.data?.error || '';
+      if (status && status !== 400 && status !== 404 && msg !== 'Invalid user id') {
+        showToast(msg || "Couldn't load Important messages", 'error');
+      }
+    } finally {
+      setImportantLoading(false);
+    }
+  }, [getDisplayName, i18n.language, showToast, user?.id]);
+
+  useEffect(() => {
+    if (hasLocalKeyring) void loadImportantMessages();
+  }, [hasLocalKeyring, loadImportantMessages]);
+
+  useEffect(() => {
+    importantEntriesRef.current = importantEntries;
+  }, [importantEntries]);
+
+  const markMessageImportantIfNeeded = useCallback(async (rawMessage) => {
+    if (!rawMessage || !user?.id) return;
+    const messageId = String(rawMessage.id || rawMessage._id || '');
+    if (!messageId) return;
+    const alreadyImportant = importantEntriesRef.current.some((entry) => String(entry.id || entry._id) === messageId);
+    if (alreadyImportant) return;
+    const autoSource = getAutomaticImportantSource(rawMessage);
+    if (!autoSource) return;
+    if (getAutoImportantRemovedIds(user.id).includes(messageId)) return;
+
+    try {
+      await client.post(`/messages/${messageId}/important`);
+      setImportantEntries((current) => [{
+        ...rawMessage,
+        id: messageId,
+        title: rawMessage.title || 'Chat',
+        conversationId: rawMessage.conversationId || rawMessage.group || rawMessage.to || rawMessage.from,
+        type: rawMessage.group ? 'group' : 'dm',
+        hasAttachment: Boolean(rawMessage.attachment || rawMessage.attachments?.length),
+        attachmentFilename: rawMessage.attachment?.filename || rawMessage.attachments?.[0]?.filename || null,
+        text: rawMessage.text || rawMessage.content || null,
+        important: true,
+        isImportant: true,
+        importantAt: new Date().toISOString(),
+        importantSource: autoSource,
+      }, ...current]);
+    } catch (err) {
+      // Ignore duplicate or noisy auto-save failures; the backend already
+      // guards against repeated writes for the same message.
+    }
+  }, [user?.id]);
 
   const recordActivityFromMessage = useCallback(
     (raw) => {
@@ -1409,8 +1620,8 @@ useEffect(() => {
       if (!fromSelf) {
         const convKey = raw.group
           ? conversationKeyForGroup(
-              typeof raw.group === "object" ? raw.group.id || raw.group._id : raw.group,
-            )
+            typeof raw.group === "object" ? raw.group.id || raw.group._id : raw.group,
+          )
           : conversationKeyForUser(
             String(raw.from) === String(user.id) ? raw.to : raw.from,
           );
@@ -1422,34 +1633,37 @@ useEffect(() => {
         }
 
         const muted = isChatMuted(user.id, convKey);
-  const isMention = Array.isArray(raw.mentionedUserIds)
-  ? raw.mentionedUserIds.map(String).includes(String(user.id))
-  : false;
-  if (isMention) {
-    const messageId = raw.id || raw._id;
-    const groupId = typeof raw.group === "object" ? raw.group.id || raw.group._id : raw.group;
-    const groupName = typeof raw.group === "object" ? raw.group.name : undefined;
-    const actorId = raw.from;
-    const actor = resolveActivityActor(actorId);
-    const decoratedMessage = decorate(raw);
-    const mentionId = messageId || (actorId && (groupId || raw.to) ? `${actorId}:${groupId || raw.to}` : null);
-    if (mentionId) {
-      activityStore.appendEvent({
-        id: mentionId,
-        type: "mention",
-        actorId,
-        actorName: actor.actorLabel,
-        actorIsCurrentUser: actor.actorIsCurrentUser,
-        targetId: groupId || raw.to,
-        messageId,
-        groupId,
-        groupName: groupName || groupsRef.current.find((candidate) => String(candidate.id || candidate._id) === String(groupId))?.name,
-        preview: decoratedMessage.text,
-        conversationKey: groupId ? `group:${groupId}` : raw.to ? `dm:${raw.from}` : undefined,
-      });
-    }
-  }
-  const decoratedForNotif = decorate(raw);
+        const isMention = Array.isArray(raw.mentionedUserIds)
+          ? raw.mentionedUserIds.map(String).includes(String(user.id))
+          : false;
+        if (isMention) {
+          const messageId = raw.id || raw._id;
+          const groupId = typeof raw.group === "object" ? raw.group.id || raw.group._id : raw.group;
+          const groupName = typeof raw.group === "object" ? raw.group.name : undefined;
+          const actorId = raw.from;
+          const actor = resolveActivityActor(actorId);
+          const decoratedMessage = decorate(raw);
+          const mentionId = messageId || (actorId && (groupId || raw.to) ? `${actorId}:${groupId || raw.to}` : null);
+          if (mentionId) {
+            activityStore.appendEvent({
+              id: mentionId,
+              type: "mention",
+              actorId,
+              actorName: actor.actorLabel,
+              actorIsCurrentUser: actor.actorIsCurrentUser,
+              targetId: groupId || raw.to,
+              messageId,
+              groupId,
+              groupName: groupName || groupsRef.current.find((candidate) => String(candidate.id || candidate._id) === String(groupId))?.name,
+              preview: decoratedMessage.text,
+              conversationKey: groupId ? `group:${groupId}` : raw.to ? `dm:${raw.from}` : undefined,
+            });
+          }
+        }
+        const decoratedForNotif = decorate(raw);
+              if (raw.timeCapsule && raw.capsuleDeliveredAt) {
+        showToast('✨ A time capsule just unlocked!', 'success', 5000);
+      }
         const storyPayload = parseStoryPayload(decoratedForNotif.text);
         const reactionsExcluded =
           notifSettings?.messageNotifications === "all_except_reactions" &&
@@ -1462,6 +1676,7 @@ useEffect(() => {
             : shouldNotify(notifSettings, {
               kind: raw.group ? "group" : "dm",
               isMention,
+              isAnnouncement: raw.kind === "announcement",   // NEW
             }));
 
         if (notifyOk) {
@@ -1519,15 +1734,15 @@ useEffect(() => {
               },
               notifSettings,
               () => {
-              const target = raw.group
-                ? { key: convKey, type: "group", id: raw.group }
-                : {
-                  key: convKey,
-                  type: "dm",
-                  id: String(raw.from) === String(user.id) ? raw.to : raw.from,
-                };
-              handleSelectConversation(target);
-            });
+                const target = raw.group
+                  ? { key: convKey, type: "group", id: raw.group }
+                  : {
+                    key: convKey,
+                    type: "dm",
+                    id: String(raw.from) === String(user.id) ? raw.to : raw.from,
+                  };
+                handleSelectConversation(target);
+              });
           } else if (!muted) {
             playReceiveSound(
               typeof notifSettings?.soundVolume === "number"
@@ -1536,6 +1751,13 @@ useEffect(() => {
             );
           }
         }
+      }
+
+      // Always acknowledge delivery as soon as the client receives the message
+      // over the socket, regardless of whether this conversation is currently open.
+      if (String(raw.from) !== String(user.id)) {
+        const socket = getSocket();
+        socket?.emit("message:delivered", { messageId: raw.id || raw._id });
       }
 
       // Only mutate the open thread for the active conversation.
@@ -1597,23 +1819,36 @@ useEffect(() => {
         }
         return next;
       });
+      void markMessageImportantIfNeeded(raw);
 
       if (String(raw.from) !== String(user.id)) {
         const socket = getSocket();
-        socket?.emit("message:delivered", { messageId: raw.id || raw._id });
-        if (selectedRef.current?.type === "group") {
+
+        const rawGroupId =
+          raw.group && typeof raw.group === "object"
+            ? raw.group.id || raw.group._id
+            : raw.group;
+
+        if (
+          selectedRef.current?.type === "group" &&
+          rawGroupId &&
+          String(selectedRef.current.id) === String(rawGroupId)
+        ) {
           socket?.emit("message:read", {
             messageId: raw.id || raw._id,
             groupId: selectedRef.current.id,
           });
           client
             .post(`/groups/${selectedRef.current.id}/messages/read`)
-            .catch(() => {});
-        } else if (selectedRef.current?.type === "dm") {
+            .catch(() => { });
+        } else if (
+          selectedRef.current?.type === "dm" &&
+          String(selectedRef.current.id) === String(raw.from)
+        ) {
           socket?.emit("message:read", { messageId: raw.id || raw._id });
           client
             .post(`/messages/${selectedRef.current.id}/read`)
-            .catch(() => {});
+            .catch(() => { });
         }
       }
     }
@@ -1630,55 +1865,77 @@ useEffect(() => {
       setMessages((prev) => prev.filter((m) => String(m.id || m._id) !== id));
     }
 
-   function handleReaction(raw) {
-    const messageId = String(raw?.id || raw?._id || raw?.messageId || raw?.message?.id || raw?.message?._id || "");
-    if (!messageId) return;
+    function handleReaction(raw) {
+      const messageId = String(raw?.id || raw?._id || raw?.messageId || raw?.message?.id || raw?.message?._id || "");
+      if (!messageId) return;
 
-    // raw is a full-message snapshot, not a delta — diff its decrypted
-    // reactions against what we last rendered for this message to find
-    // out WHO just reacted and with WHAT emoji. raw.from is the message's
-    // original author, never the reactor — do not use it for actorId.
-    const decorated = decorate(raw);
-    const prevMessage = messagesRef.current.find(
-      (candidate) => String(candidate.id || candidate._id) === messageId,
-    );
-    const prevReactions = prevMessage?.reactions || [];
-    const nextReactions = decorated.reactions || [];
-    const changed = nextReactions.find((next) => {
-      const prev = prevReactions.find((p) => String(p.user) === String(next.user));
-      return !prev || prev.emoji !== next.emoji;
-    });
-
-    if (changed) {
-      const actorId = changed.user;
-      const actor = resolveActivityActor(actorId);
-      const groupId = typeof raw?.group === "object" ? raw.group.id || raw.group._id : raw?.group;
-      const groupName = typeof raw?.group === "object" ? raw.group.name : groupsRef.current.find((candidate) => String(candidate.id || candidate._id) === String(groupId))?.name;
-      const originalAuthor = resolveActivityActor(decorated.from);
-      activityStore.appendEvent({
-        id: `${messageId}:${actorId}:${changed.emoji || "clear"}:${Date.now()}`,
-        type: "reaction",
-        targetId: messageId,
-        messageId,
-        actorId,
-        actorName: actor.actorLabel,
-        actorIsCurrentUser: actor.actorIsCurrentUser,
-        emoji: changed.emoji,
-        groupId,
-        groupName,
-        preview: decorated.text,
-        originalAuthorLabel: originalAuthor.actorLabel,
-        originalAuthorIsCurrentUser: originalAuthor.actorIsCurrentUser,
-        reactedByYou: actor.actorIsCurrentUser,
-        conversationKey: groupId ? `group:${groupId}` : undefined,
+      // raw is a full-message snapshot, not a delta — diff its decrypted
+      // reactions against what we last rendered for this message to find
+      // out WHO just reacted and with WHAT emoji. raw.from is the message's
+      // original author, never the reactor — do not use it for actorId.
+      const decorated = decorate(raw);
+      const prevMessage = messagesRef.current.find(
+        (candidate) => String(candidate.id || candidate._id) === messageId,
+      );
+      const prevReactions = prevMessage?.reactions || [];
+      const nextReactions = decorated.reactions || [];
+      const changed = nextReactions.find((next) => {
+        const prev = prevReactions.find((p) => String(p.user) === String(next.user));
+        return !prev || prev.emoji !== next.emoji;
       });
-    }
 
-   if (!isCurrentConversation(raw)) return;
-    setMessages((prev) =>
-      prev.map((m) => (String(m.id || m._id) === messageId ? decorated : m)),
-    );
-  }
+      if (changed) {
+        const actorId = changed.user;
+        const actor = resolveActivityActor(actorId);
+        const groupId = typeof raw?.group === "object" ? raw.group.id || raw.group._id : raw?.group;
+        const groupName = typeof raw?.group === "object" ? raw.group.name : groupsRef.current.find((candidate) => String(candidate.id || candidate._id) === String(groupId))?.name;
+        const originalAuthor = resolveActivityActor(decorated.from);
+        activityStore.appendEvent({
+          id: `${messageId}:${actorId}:${changed.emoji || "clear"}:${Date.now()}`,
+          type: "reaction",
+          targetId: messageId,
+          messageId,
+          actorId,
+          actorName: actor.actorLabel,
+          actorIsCurrentUser: actor.actorIsCurrentUser,
+          emoji: changed.emoji,
+          groupId,
+          groupName,
+          preview: decorated.text,
+          originalAuthorLabel: originalAuthor.actorLabel,
+          originalAuthorIsCurrentUser: originalAuthor.actorIsCurrentUser,
+          reactedByYou: actor.actorIsCurrentUser,
+          conversationKey: groupId ? `group:${groupId}` : undefined,
+        });
+      }
+
+      if (changed && String(actorId) !== String(user.id)) {
+        const convKey = groupId
+          ? conversationKeyForGroup(groupId)
+          : conversationKeyForUser(String(decorated.from) === String(user.id) ? decorated.to : decorated.from);
+        const muted = isChatMuted(user.id, convKey);
+        if (!muted && shouldNotify(notifSettings, { kind: 'reaction' })) {
+          playNotificationSound(notifSettings);
+          showNotificationPopup(
+            {
+              title: 'QuantumChat',
+              body: `${actor.actorLabel} reacted ${changed.emoji || ''} to your message`,
+              tag: groupId ? `group:${groupId}` : `dm:${[String(user.id), String(actorId)].sort().join(':')}`,
+            },
+            notifSettings,
+            () =>
+              handleSelectConversation(
+                groupId ? { key: convKey, type: 'group', id: groupId } : { key: convKey, type: 'dm', id: actorId },
+              ),
+          );
+        }
+      }
+
+      if (!isCurrentConversation(raw)) return;
+      setMessages((prev) =>
+        prev.map((m) => (String(m.id || m._id) === messageId ? decorated : m)),
+      );
+    }
 
     function handleEdited(raw) {
       const id = String(raw?.id || raw?._id || "");
@@ -1713,16 +1970,16 @@ useEffect(() => {
       const group = payload?.group || payload;
       const groupId = group?.id || group?._id || payload?.groupId;
       if (groupId) {
-      activityStore.appendEvent({
-        id: `new:${groupId}`,
-        type: "group",
-        targetId: groupId,
-        groupId,
-        groupName: group?.name || payload?.groupName,
-        action: "created",
-        actorId: payload?.actorId || payload?.createdBy,
-        ...resolveActivityActor(payload?.actorId || payload?.createdBy),
-      });
+        activityStore.appendEvent({
+          id: `new:${groupId}`,
+          type: "group",
+          targetId: groupId,
+          groupId,
+          groupName: group?.name || payload?.groupName,
+          action: "created",
+          actorId: payload?.actorId || payload?.createdBy,
+          ...resolveActivityActor(payload?.actorId || payload?.createdBy),
+        });
       }
       setGroups((prev) => {
         if (!groupId) return prev;
@@ -1738,17 +1995,17 @@ useEffect(() => {
     async function handleFriendRequestNew(payload = {}) {
       const request = payload?.request || payload;
       const requestId = request.id || request._id || request.requestId || payload.requestId;
-    const actorId = request.from || request.senderId || request.userId || payload.from;
-    const actor = resolveActivityActor(actorId);
-    if (requestId || actorId) {
-      activityStore.appendEvent({
-        id: requestId || `from:${actorId}`,
-        type: "friend_request",
-        actorId,
-        actorName: actor.actorLabel,
-        actorIsCurrentUser: actor.actorIsCurrentUser,
-        targetId: request.to || request.recipientId || user?.id,
-      });
+      const actorId = request.from || request.senderId || request.userId || payload.from;
+      const actor = resolveActivityActor(actorId);
+      if (requestId || actorId) {
+        activityStore.appendEvent({
+          id: requestId || `from:${actorId}`,
+          type: "friend_request",
+          actorId,
+          actorName: actor.actorLabel,
+          actorIsCurrentUser: actor.actorIsCurrentUser,
+          targetId: request.to || request.recipientId || user?.id,
+        });
       }
       loadFriendRequests();
       showToast("New friend request", "info");
@@ -1859,6 +2116,7 @@ useEffect(() => {
         setSelected(null);
         setMessages([]);
         setShowGroupSettings(false);
+        setShowCommandCenter(false);
         if (location.pathname !== "/chat") navigate("/chat");
       }
     }
@@ -1876,7 +2134,7 @@ useEffect(() => {
       );
     }
 
-    function handleMentionNew(payload = {}) {
+     function handleMentionNew(payload = {}) {
       const message = payload?.message || payload;
       const from = message.from || message.senderId || payload.from;
       const messageId = message.id || message._id || message.messageId || payload.messageId;
@@ -1892,38 +2150,91 @@ useEffect(() => {
           conversationKey: groupId ? `group:${groupId}` : undefined,
         });
       }
-      const username =
-        String(from) === String(user.id)
-          ? user.username
-          : users.find((u) => String(u.id) === String(from))?.username;
-      showToast(`${username || "Someone"} mentioned you`);
+
+      const isSelf = String(from) === String(user.id);
+      const username = isSelf
+        ? user.username
+        : users.find((u) => String(u.id) === String(from))?.username;
+      const groupName = groupId
+        ? groups.find((g) => String(g.id) === String(groupId))?.name
+        : null;
+
+      const convKey = groupId ? conversationKeyForGroup(groupId) : null;
+      const muted = convKey ? isChatMuted(user.id, convKey) : false;
+      const current = selectedRef.current;
+      const isCurrent =
+        groupId && current?.type === "group" && String(current.id) === String(groupId);
+
+      // Mentions always alert unless the chat itself is muted — a mention
+      // is a direct call-out, so it shouldn't be silently downgraded to a
+      // toast the way a routine group message can be.
+      if (isSelf || muted) {
+        showToast(`${username || "Someone"} mentioned you`);
+        return;
+      }
+
+      playNotificationSound(notifSettings);
+      showNotificationPopup(
+        {
+          title: groupName || "Group mention",
+          body: `${username || "Someone"} mentioned you`,
+          tag: groupId ? `group:${groupId}` : undefined,
+          data: {
+            url: groupId ? `/chat/g/${groupId}` : undefined,
+            kind: "group",
+          },
+        },
+        notifSettings,
+        () => {
+          if (groupId) {
+            handleSelectConversation({ key: convKey, type: "group", id: groupId });
+          }
+          if (messageId) handleSearchResult(messageId);
+        },
+      );
+
+      if (!isCurrent) {
+        showToast(`${username || "Someone"} mentioned you in ${groupName || "a group"}`);
+      }
     }
 
     function handleTypingStart({ from, groupId } = {}) {
+      console.log('[TYPING-DBG] typing:start received', { from, groupId, currentSelected: selectedRef.current?.id, currentType: selectedRef.current?.type });
       const current = selectedRef.current;
-      if (!current) return;
+      if (!current) { console.log('[TYPING-DBG] no current selected, ignoring'); return; }
       if (
         groupId &&
         current.type === "group" &&
         String(groupId) === String(current.id)
       ) {
-        if (String(from) === String(user.id)) return;
-        const name =
-          users.find((u) => String(u.id) === String(from))?.username ||
-          (current.group?.members || []).find(
-            (m) => String(m.id || m._id) === String(from),
-          )?.username ||
-          "Someone";
-        setGroupTypingNames((prev) =>
-          prev.includes(name) ? prev : [...prev, name].slice(-3),
-        );
+        if (String(from) === String(user.id)) { console.log('[TYPING-DBG] own typing, ignoring'); return; }
+        const activeGroup = groups.find((g) => String(g.id) === String(current.id)) || current.group;
+        let u = users.find((u) => String(u.id) === String(from));
+        console.log('[TYPING-DBG] resolved user from users array:', u);
+        if (!u) {
+          const member = (activeGroup?.members || []).find(
+            (m) => String(m.user?._id || m.user?.id || m.id || m._id) === String(from)
+          );
+          u = member?.user || member;
+          console.log('[TYPING-DBG] resolved user from group members:', u);
+        }
+        const name = u?.username || "Someone";
+        const hasAvatar = u?.hasAvatar || !!u?.avatarPath;
+        const userObj = { id: from, username: name, hasAvatar };
+        console.log('[TYPING-DBG] setting groupTypingUsers with', userObj);
+
+        setGroupTypingUsers((prev) => {
+          const filtered = prev.filter(p => String(p.id) !== String(from));
+          return [...filtered, userObj].slice(-5);
+        });
         clearTimeout(typingPeerTimeoutRef.current);
         typingPeerTimeoutRef.current = setTimeout(
-          () => setGroupTypingNames([]),
+          () => setGroupTypingUsers([]),
           3000,
         );
         return;
       }
+      console.log('[TYPING-DBG] group condition not matched — groupId:', groupId, 'current.type:', current?.type, 'current.id:', current?.id);
       if (current.type !== "dm") return;
       if (String(from) !== String(current.id)) return;
       setPeerTyping(true);
@@ -1942,8 +2253,7 @@ useEffect(() => {
         current.type === "group" &&
         String(groupId) === String(current.id)
       ) {
-        const name = users.find((u) => String(u.id) === String(from))?.username;
-        if (name) setGroupTypingNames((prev) => prev.filter((n) => n !== name));
+        setGroupTypingUsers((prev) => prev.filter((u) => String(u.id) !== String(from)));
         return;
       }
       if (current.type !== "dm") return;
@@ -1956,18 +2266,27 @@ useEffect(() => {
     }
 
     function handlePresenceUpdate({ userId, online, lastLoginAt } = {}) {
+      const id = String(userId);
       setOnlineUserIds((prev) => {
         const next = new Set(prev);
-        if (online) next.add(String(userId));
-        else next.delete(String(userId));
+        if (online) next.add(id);
+        else next.delete(id);
         return next;
       });
-      if (!online && lastLoginAt) {
+      if (lastLoginAt) {
         setUsers((prev) =>
           prev.map((u) =>
-            String(u.id) === String(userId) ? { ...u, lastLoginAt } : u,
+            String(u.id) === id ? { ...u, lastLoginAt } : u,
           ),
         );
+        setSelected((cur) => {
+          if (!cur || cur.type !== "dm" || String(cur.id) !== id) return cur;
+          if (cur.peer?.lastLoginAt === lastLoginAt) return cur;
+          return {
+            ...cur,
+            peer: { ...(cur.peer || {}), lastLoginAt },
+          };
+        });
       }
     }
 
@@ -2036,10 +2355,9 @@ useEffect(() => {
     }
 
     function handleChatCleared(payload = {}) {
-      // Multi-device sync: another of this user's sessions cleared a chat. If
-      // we're viewing that same conversation, empty it here too. The backend
-      // already filters cleared messages out of fetch/sync, so nothing stale
-      // reappears on a later refresh.
+      // Multi-device sync: another of this user's sessions cleared a chat.
+      // Scoped clears (photos only, etc.) must NOT wipe the whole thread —
+      // only drop matching messages. Full "all" clears empty the view.
       const current = selectedRef.current;
       if (!current) return;
       const matchesGroup =
@@ -2050,9 +2368,56 @@ useEffect(() => {
         payload.peerId &&
         current.type === "dm" &&
         String(current.id) === String(payload.peerId);
-      if (matchesGroup || matchesDm) {
+      if (!matchesGroup && !matchesDm) return;
+
+      const scopes = Array.isArray(payload.scopes) && payload.scopes.length
+        ? payload.scopes.map(String)
+        : ["all"];
+      if (scopes.includes("all")) {
         setMessages([]);
+        return;
       }
+
+      const clearedAtMs = payload.clearedAt
+        ? new Date(payload.clearedAt).getTime()
+        : Date.now();
+
+      setMessages((prev) =>
+        prev.filter((m) => {
+          const createdMs = new Date(m.createdAt || 0).getTime();
+          if (createdMs > clearedAtMs) return true;
+          return !scopes.some((scope) => messageMatchesClearScope(m, scope));
+        }),
+      );
+    }
+
+    function handleChatClearUndone(payload = {}) {
+      // Another of this user's sessions undid a clear — re-fetch if we're
+      // looking at that conversation so hidden messages come back.
+      const current = selectedRef.current;
+      if (!current) return;
+      const matchesGroup =
+        payload.groupId &&
+        current.type === "group" &&
+        String(current.id) === String(payload.groupId);
+      const matchesDm =
+        payload.peerId &&
+        current.type === "dm" &&
+        String(current.id) === String(payload.peerId);
+      if (!matchesGroup && !matchesDm) return;
+
+      const endpoint =
+        current.type === "group"
+          ? `/groups/${current.id}/messages`
+          : `/messages/${current.id}`;
+      setLoadingMessages(true);
+      client
+        .get(endpoint, { params: { limit: 80, markRead: 0 } })
+        .then((res) => {
+          setMessages((res.data.data || []).map((raw) => decorateRef.current(raw)));
+        })
+        .catch(() => {})
+        .finally(() => setLoadingMessages(false));
     }
 
     function handleUserStatus(payload = {}) {
@@ -2101,16 +2466,20 @@ useEffect(() => {
     socket.on("friend:request:accepted", handleFriendRequestAccepted);
     socket.on("friend:removed", handleFriendRemoved);
     socket.on("chat:cleared", handleChatCleared);
+    socket.on("chat:clear-undone", handleChatClearUndone);
     socket.on("user:status", handleUserStatus);
 
     // Auth may connect the socket before Chat mounts, so the initial
     // presence:snapshot is easy to miss. Re-request whenever listeners attach
     // and again after every reconnect.
-    function requestPresence() {
-      if (socket.connected) socket.emit("presence:request");
-    }
-    socket.on("connect", requestPresence);
-    requestPresence();
+  function requestPresence() {
+  if (socket.connected) {
+    socket.emit("presence:request");
+    syncTypingPrivacy();
+  }
+  }
+  socket.on("connect", requestPresence);
+  requestPresence();
 
     return () => {
       socket.off("message:new", handleIncoming);
@@ -2133,10 +2502,14 @@ useEffect(() => {
       socket.off("friend:request:accepted", handleFriendRequestAccepted);
       socket.off("friend:removed", handleFriendRemoved);
       socket.off("chat:cleared", handleChatCleared);
+      socket.off("chat:clear-undone", handleChatClearUndone);
       socket.off("user:status", handleUserStatus);
-      socket.off("connect", requestPresence);
-      clearTimeout(typingPeerTimeoutRef.current);
-    };
+  socket.off("connect", requestPresence);
+  stopTyping({ emit: false });
+  clearTimeout(typingPeerTimeoutRef.current);
+  setPeerTyping(false);
+  setGroupTypingUsers([]);
+  };
   }, [
     hasLocalKeyring,
     user,
@@ -2163,26 +2536,39 @@ useEffect(() => {
 
     let cancelled = false;
     let inFlight = false;
+    let lastSocketPeerSyncAt = 0;
+    let lastWatchedPeerId = null;
 
     async function syncPresence() {
       if (cancelled || inFlight) return;
       if (document.visibilityState === "hidden") return;
       const socket = getSocket();
-      if (socket?.connected) return;
+      const socketConnected = Boolean(socket?.connected);
+
+      const current = selectedRef.current;
+      const watchPeerId =
+        current?.type === "dm" &&
+          !current.isSelfChat &&
+          String(current.id) !== String(user.id)
+          ? String(current.id)
+          : null;
+      const watchGroupId =
+        current?.type === "group" ? String(current.id) : null;
+      const typing = presenceTypingRef.current || {};
+
+      // Socket owns live online/typing. Still heartbeat when watching a peer so
+      // last-seen stays fresh (and as full fallback when the socket is down).
+      if (socketConnected) {
+        if (!watchPeerId) return;
+        const peerChanged = watchPeerId !== lastWatchedPeerId;
+        lastWatchedPeerId = watchPeerId;
+        // Avoid hammering the DB every 2s while Socket.IO is already connected.
+        if (!peerChanged && Date.now() - lastSocketPeerSyncAt < 12_000) return;
+        lastSocketPeerSyncAt = Date.now();
+      }
 
       inFlight = true;
       try {
-        const current = selectedRef.current;
-        const watchPeerId =
-          current?.type === "dm" &&
-          !current.isSelfChat &&
-          String(current.id) !== String(user.id)
-            ? String(current.id)
-            : null;
-        const watchGroupId =
-          current?.type === "group" ? String(current.id) : null;
-        const typing = presenceTypingRef.current || {};
-
         const data = await postPresenceHeartbeat({
           typingTo: typing.to || null,
           typingGroupId: typing.groupId || null,
@@ -2192,7 +2578,33 @@ useEffect(() => {
 
         if (cancelled) return;
 
-        setOnlineUserIds(new Set((data.onlineUserIds || []).map(String)));
+        if (!socketConnected) {
+          setOnlineUserIds(new Set((data.onlineUserIds || []).map(String)));
+        }
+
+        const peerPresence = data.peerPresence;
+        if (peerPresence?.userId) {
+          const peerId = String(peerPresence.userId);
+          if (peerPresence.lastLoginAt) {
+            setUsers((prev) =>
+              prev.map((u) =>
+                String(u.id) === peerId
+                  ? { ...u, lastLoginAt: peerPresence.lastLoginAt }
+                  : u,
+              ),
+            );
+            setSelected((cur) => {
+              if (!cur || cur.type !== "dm" || String(cur.id) !== peerId) return cur;
+              if (cur.peer?.lastLoginAt === peerPresence.lastLoginAt) return cur;
+              return {
+                ...cur,
+                peer: { ...(cur.peer || {}), lastLoginAt: peerPresence.lastLoginAt },
+              };
+            });
+          }
+        }
+
+        if (socketConnected) return;
 
         const events = Array.isArray(data.typing) ? data.typing : [];
         if (watchPeerId) {
@@ -2205,17 +2617,24 @@ useEffect(() => {
         }
 
         if (watchGroupId) {
-          const names = events
-            .filter((t) => String(t.groupId) === watchGroupId)
+          const typingUserObjs = events
+            .filter((t) => String(t.groupId) === watchGroupId && String(t.from) !== String(user.id))
             .map((t) => {
               const u = usersRef.current.find(
                 (x) => String(x.id) === String(t.from),
               );
-              return u?.username || u?.displayName || "Someone";
+              return {
+                id: t.from,
+                username: u?.username || u?.displayName || "Someone",
+                hasAvatar: u?.hasAvatar || Boolean(u?.avatarPath),
+              };
             });
-          setGroupTypingNames([...new Set(names)].slice(-3));
+          const unique = typingUserObjs.filter(
+            (u, i, arr) => arr.findIndex(x => String(x.id) === String(u.id)) === i
+          ).slice(-5);
+          setGroupTypingUsers(unique);
         } else {
-          setGroupTypingNames([]);
+          setGroupTypingUsers([]);
         }
       } catch {
         // Keep retrying; transient failures should not require a reload.
@@ -2261,6 +2680,14 @@ useEffect(() => {
     const threadKey = selectedKey;
     const threadType = selectedType;
     const threadId = selectedId;
+    // DMs must use a real Mongo ObjectId — reserved paths like "important"
+    // or "settings" must never hit GET /messages/:userId.
+    if (
+      threadType === "dm" &&
+      !/^[a-f0-9]{24}$/i.test(String(threadId))
+    ) {
+      return undefined;
+    }
     const switching = loadedThreadKeyRef.current !== threadKey;
     loadedThreadKeyRef.current = threadKey;
 
@@ -2295,6 +2722,9 @@ useEffect(() => {
       .then((res) => {
         if (cancelled) return;
         const next = (res.data.data || []).map((raw) => decorateRef.current(raw));
+        getOfflineMessages(user.id, threadKey).then((queued) => {
+          if (!cancelled) setMessages([...next, ...queued.map(pendingMessageFromOutbox)]);
+        });
         setHasMoreMessages(Boolean(res.data.meta?.hasMore));
         oldestCreatedAtRef.current = next[0]?.createdAt || null;
         if (next.length) {
@@ -2310,13 +2740,14 @@ useEffect(() => {
         }
         setTimeout(() => scrollToBottomRef.current("auto"), 50);
       })
-      .catch((err) =>
+      .catch((err) => {
+        if (cancelled) return;
         showToastRef.current(
           err.response?.data?.error || "Failed to load messages",
           "error",
-        ),
-      )
-     .finally(() => {
+        );
+      })
+      .finally(() => {
         if (!cancelled) setLoadingMessages(false);
       });
 
@@ -2328,7 +2759,7 @@ useEffect(() => {
     // client.js's interceptor, so the server swaps between the decoy and
     // real message set automatically — this just re-triggers that fetch.
   }, [selectedKey, selectedType, selectedId, hasLocalKeyring, user.id, vaultUnlocked]);
-// Vault: only fetch/show "has decoy messages" when actually unlocked and
+  // Vault: only fetch/show "has decoy messages" when actually unlocked and
   // viewing a vaulted DM — this call itself 403s if locked (server-enforced),
   // but skip it entirely rather than firing a doomed request every switch.
   useEffect(() => {
@@ -2382,9 +2813,9 @@ useEffect(() => {
         String(next.deliveredAt || "") !== String(message.deliveredAt || "") ||
         String(next.editedAt || "") !== String(message.editedAt || "") ||
         String(next.viewOnceOpenedAt || "") !==
-          String(message.viewOnceOpenedAt || "") ||
+        String(message.viewOnceOpenedAt || "") ||
         String(next.viewOnceOpenedBy || "") !==
-          String(message.viewOnceOpenedBy || "") ||
+        String(message.viewOnceOpenedBy || "") ||
         attachmentId(next) !== attachmentId(message) ||
         (next.reactions || []).length !== (message.reactions || []).length
       );
@@ -2590,8 +3021,8 @@ useEffect(() => {
                 "Someone";
               const groupName = raw.group
                 ? groupsRef.current.find(
-                    (g) => String(g.id) === String(raw.group),
-                  )?.name
+                  (g) => String(g.id) === String(raw.group),
+                )?.name
                 : null;
               const buffer = pendingNotificationsRef.current.get(convKey) || [];
               buffer.push({ senderName, text: decorated.text });
@@ -2719,10 +3150,10 @@ useEffect(() => {
     if (!canChat) return;
     // Keep Web Push subscribed so OS toasts work while using other apps (e.g. Cursor).
     // Do not prompt from this effect — browsers block permission without a user gesture.
-    enablePushNotifications({ requestPermission: false }).catch(() => {});
+    enablePushNotifications({ requestPermission: false }).catch(() => { });
     const onVisible = () => {
       if (document.visibilityState === 'visible') {
-        enablePushNotifications({ requestPermission: false }).catch(() => {});
+        enablePushNotifications({ requestPermission: false }).catch(() => { });
       }
     };
     document.addEventListener('visibilitychange', onVisible);
@@ -2762,13 +3193,55 @@ useEffect(() => {
     (conversation) => {
       if (!conversation || conversation.type === "group") return null;
       if (String(conversation.id) === String(user?.id)) return selfPeer;
-      return (
-        conversation.peer ||
-        users.find((u) => String(u.id) === String(conversation.id)) ||
-        null
-      );
+      const fromList = users.find((u) => String(u.id) === String(conversation.id));
+      const peer = conversation.peer;
+      // Prefer live users[] fields (lastLoginAt) over a stale selected.peer snapshot.
+      if (fromList && peer) return { ...peer, ...fromList };
+      return fromList || peer || null;
     },
     [user?.id, selfPeer, users],
+  );
+
+  const ensurePeerKeys = useCallback(
+    async (targetConversation) => {
+      if (!targetConversation || targetConversation.type === "group") return [];
+      let peer = resolveDmPeer(targetConversation);
+      let keys = (peer?.publicKeys || []).filter(Boolean);
+      if (keys.length > 0) return keys;
+
+      const peerId = targetConversation.id;
+      if (!peerId || String(peerId) === String(user?.id)) return [];
+
+      try {
+        const { data } = await client.get(`/users/${peerId}`);
+        const freshUser = data?.data;
+        if (freshUser) {
+          const freshKeys = (freshUser.publicKeys || []).filter(Boolean);
+          setUsers((prev) => {
+            const idx = prev.findIndex((u) => String(u.id) === String(peerId));
+            if (idx >= 0) {
+              const copy = [...prev];
+              copy[idx] = { ...copy[idx], ...freshUser };
+              return copy;
+            }
+            return [...prev, freshUser];
+          });
+          setSelected((cur) => {
+            if (!cur || cur.type !== "dm" || String(cur.id) !== String(peerId)) return cur;
+            return {
+              ...cur,
+              title: cur.title === "Chat" ? (getDisplayName(freshUser, i18n.language) || freshUser.username || "Chat") : cur.title,
+              peer: { ...(cur.peer || {}), ...freshUser },
+            };
+          });
+          return freshKeys;
+        }
+      } catch (err) {
+        console.warn("[ensurePeerKeys] failed to fetch public keys for peer", peerId, err);
+      }
+      return [];
+    },
+    [resolveDmPeer, user?.id, i18n.language],
   );
 
   const screenshotProtectionOn = useMemo(
@@ -2783,13 +3256,15 @@ useEffect(() => {
       }),
     [user?.id, selected, profileUserId, users, groups, resolveDmPeer],
   );
-  useScreenshotProtection(screenshotProtectionOn, {
+  // Only protect the open chat thread — Settings and other app overlays stay capturable.
+  useScreenshotProtection(screenshotProtectionOn && !showSettings, {
     scope: "chat",
+    targetSelector: ".chat-main",
     onAttempt: (reason) => {
       showToast(
         reason === "screenshot"
-          ? "Screenshot blocked — this contact protects their content"
-          : "Screen capture blocked — this contact protects their content",
+          ? "Screenshot blocked — this contact protects their chat"
+          : "Screen capture blocked — this contact protects their chat",
         "info",
         3500,
       );
@@ -2804,6 +3279,7 @@ useEffect(() => {
     const activeGroups = searchResults ? searchResults.groups : groups;
     const muted = new Set(mutedKeys.map(String));
     const archived = new Set(archivedKeys.map(String));
+    const pinned = new Set(pinnedChatKeys.map(String));
 
     if (user?.id && selfPeer) {
       const key = conversationKeyForUser(user.id);
@@ -2828,6 +3304,7 @@ useEffect(() => {
         peer: selfPeer,
         muted: muted.has(String(key)),
         archived: archived.has(String(key)),
+        pinned: pinned.has(String(key)),
         online: false,
         isSelfChat: true,
       });
@@ -2859,6 +3336,7 @@ useEffect(() => {
         peer: u,
         muted: muted.has(String(key)),
         archived: archived.has(String(key)),
+        pinned: pinned.has(String(key)),
         online,
       });
     }
@@ -2889,6 +3367,7 @@ useEffect(() => {
         group: g,
         muted: muted.has(String(key)),
         archived: archived.has(String(key)),
+        pinned: pinned.has(String(key)),
         online: false,
       });
     }
@@ -2916,6 +3395,7 @@ useEffect(() => {
 
     items.sort((a, b) => {
       if (a.isSelfChat !== b.isSelfChat) return a.isSelfChat ? -1 : 1;
+      if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
       if (a.unread !== b.unread) return a.unread ? -1 : 1;
       return String(b.sortAt).localeCompare(String(a.sortAt));
     });
@@ -2947,7 +3427,7 @@ useEffect(() => {
       if (!searchResults && q && !(c.searchText || "").includes(q)) return false;
       return true;
     });
- }, [
+  }, [
     users,
     groups,
     user.id,
@@ -2959,6 +3439,7 @@ useEffect(() => {
     hiddenChatIds,
     mutedKeys,
     archivedKeys,
+    pinnedChatKeys,
     onlineUserIds,
     searchResults,
     vaultUnlocked,
@@ -3041,9 +3522,13 @@ useEffect(() => {
   }, [params.peerId, params.groupId, conversations, isSettingsRoute, selfPeer, user.id]);
 
   function applyConversationSelection(c, { syncUrl = true } = {}) {
-    if (!c) {
-      setSelected(null);
-      setMessages([]);
+  stopTyping();
+  clearTimeout(typingPeerTimeoutRef.current);
+  setPeerTyping(false);
+  setGroupTypingUsers([]);
+  if (!c) {
+  setSelected(null);
+  setMessages([]);
       if (syncUrl && !isSettingsRoute) navigate("/chat");
       return;
     }
@@ -3052,7 +3537,15 @@ useEffect(() => {
     }
     setSelected(c);
     setError("");
+    draftConversationKeyRef.current = c.key;
+    draftReadyConversationKeyRef.current = null;
     setDraft("");
+    getChatDraft(user.id, c.key).then((savedDraft) => {
+      if (draftConversationKeyRef.current === c.key) {
+        draftReadyConversationKeyRef.current = c.key;
+        setDraft(savedDraft);
+      }
+    });
     setReplyTo(null);
     setEditingMessage(null);
     setShowEmojiPicker(false);
@@ -3063,9 +3556,10 @@ useEffect(() => {
     setMentionOpen(false);
     setPendingAnnouncement(false);
     setShowGroupSettings(false);
+    setShowCommandCenter(false);
     setProfileUserId(null);
     setPeerTyping(false);
-    setGroupTypingNames([]);
+    setGroupTypingUsers([]);
     imageSrcMapRef.current = new Map();
     markConversationRead(user.id, c.key);
     pendingNotificationsRef.current.delete(c.key);
@@ -3078,28 +3572,31 @@ useEffect(() => {
       const next = chatPathForSelection(c);
       if (location.pathname !== next) navigate(next);
     }
+    if (c.type === "dm" && !c.isSelfChat && (!c.peer?.publicKeys?.length || c.title === "Chat")) {
+      ensurePeerKeys(c).catch(() => {});
+    }
   }
 
   function handleSelectConversation(c) {
     applyConversationSelection(c, { syncUrl: true });
   }
   function handleOpenStarredEntry(entry) {
-  setShowStarredMessages(false);
-  const target =
-    entry.type === "group"
-      ? conversations.find((c) => c.type === "group" && String(c.id) === String(entry.conversationId))
-      : conversations.find((c) => c.type === "dm" && String(c.id) === String(entry.conversationId));
+    setShowStarredMessages(false);
+    const target =
+      entry.type === "group"
+        ? conversations.find((c) => c.type === "group" && String(c.id) === String(entry.conversationId))
+        : conversations.find((c) => c.type === "dm" && String(c.id) === String(entry.conversationId));
 
-  const selection = target || {
-    key: entry.conversationKey,
-    type: entry.type,
-    id: entry.conversationId,
-    title: entry.title,
-  };
+    const selection = target || {
+      key: entry.conversationKey,
+      type: entry.type,
+      id: entry.conversationId,
+      title: entry.title,
+    };
 
-  setPendingJumpMessageId(entry.id);
-  handleSelectConversation(selection);
-}
+    setPendingJumpMessageId(entry.id);
+    handleSelectConversation(selection);
+  }
 
   function handleBackToList() {
     applyConversationSelection(null, { syncUrl: true });
@@ -3159,12 +3656,12 @@ useEffect(() => {
         type: "group",
         targetId: groupId,
         groupId,
-  groupName: group.name,
-  action: "created",
-  actorId: user?.id,
-  actorLabel: "you",
-  actorIsCurrentUser: true,
-  });
+        groupName: group.name,
+        action: "created",
+        actorId: user?.id,
+        actorLabel: "you",
+        actorIsCurrentUser: true,
+      });
     }
     setGroups((prev) => {
       if (prev.some((g) => String(g.id) === String(group.id))) return prev;
@@ -3260,9 +3757,9 @@ useEffect(() => {
                 fontSize: '0.8rem',
                 fontWeight: '600',
                 borderRadius: '4px',
-                border: 'none',
-                background: '#ffffff',
-                color: '#111827',
+                border: '1px solid var(--border-subtle)',
+                background: 'var(--bg-elevated)',
+                color: 'var(--text-primary)',
                 cursor: 'pointer',
                 marginTop: '2px',
               }}
@@ -3305,7 +3802,7 @@ useEffect(() => {
     }
   }
 
-async function executeAcceptFriendRequest(requestId) {
+  async function executeAcceptFriendRequest(requestId) {
     try {
       const pending = incomingRequests.find(
         (r) => String(r.id) === String(requestId),
@@ -3443,7 +3940,7 @@ async function executeAcceptFriendRequest(requestId) {
 
   async function sendGroupPayload(
     plaintext,
-    { kind, mentionedUserIds, tempId, displayText, replyToId, attachmentId, viewOnce } = {},
+    { kind, mentionedUserIds, tempId, displayText, replyToId, attachmentId, viewOnce, clientMessageId } = {},
   ) {
     if (!selected || selected.type !== "group") {
       throw new Error("No group selected");
@@ -3456,6 +3953,7 @@ async function executeAcceptFriendRequest(requestId) {
     }
     const isPublic = group.visibility === "public";
     const payload = { kind: kind || "text" };
+    if (clientMessageId) payload.clientMessageId = clientMessageId;
     if (isPublic) {
       payload.content = plaintext;
     } else {
@@ -3469,10 +3967,21 @@ async function executeAcceptFriendRequest(requestId) {
     if (disappearSeconds > 0) payload.expiresInSeconds = disappearSeconds;
     const forwardPolicy = buildForwardPolicy();
     if (forwardPolicy) payload.forwardPolicy = forwardPolicy;
+    if (clientMessageId) {
+      await saveOfflineMessage(user.id, {
+        id: clientMessageId,
+        type: "group",
+        conversationId: selected.id,
+        conversationKey: selected.key,
+        displayText: displayText ?? plaintext,
+        payload,
+      });
+    }
     const { data } = await client.post(
       `/groups/${selected.id}/messages`,
       payload,
     );
+    if (clientMessageId) await removeOfflineMessage(user.id, clientMessageId);
     recordActivityFromMessage(data.data);
     setMessages((prev) =>
       mergeConfirmedMessage(prev, {
@@ -3483,6 +3992,52 @@ async function executeAcceptFriendRequest(requestId) {
     );
     return data.data;
   }
+
+  async function retryOfflineMessage(entry) {
+    if (!entry?.id || retryingOutboxRef.current.has(entry.id)) return;
+    retryingOutboxRef.current.add(entry.id);
+    try {
+      const endpoint = entry.type === "group"
+        ? `/groups/${entry.conversationId}/messages`
+        : "/messages";
+      const { data } = await client.post(endpoint, entry.payload);
+      await removeOfflineMessage(user.id, entry.id);
+      recordActivityFromMessage(data.data);
+      setMessages((prev) =>
+        mergeConfirmedMessage(prev, {
+          tempId: `outbox-${entry.id}`,
+          serverRaw: data.data,
+          displayText: entry.displayText,
+        }),
+      );
+      playSendSound();
+    } catch {
+      // Keep the encrypted request in the outbox for the next reconnect.
+    } finally {
+      retryingOutboxRef.current.delete(entry.id);
+    }
+  }
+
+  function isRetryableSendError(err) {
+    if (err?.code === "OUTBOX_UNAVAILABLE") return false;
+    const status = err?.response?.status;
+    return !status || status === 408 || status === 429 || status >= 500;
+  }
+
+  async function retryOfflineMessages(conversationKey) {
+    if (!navigator.onLine || !user?.id) return;
+    const entries = conversationKey
+      ? await getOfflineMessages(user.id, conversationKey)
+      : await getAllOfflineMessages(user.id);
+    await Promise.all(entries.map((entry) => retryOfflineMessage(entry)));
+  }
+
+  useEffect(() => {
+    const retry = () => retryOfflineMessages();
+    window.addEventListener("online", retry);
+    retry();
+    return () => window.removeEventListener("online", retry);
+  }, [selected?.key, user?.id]);
 
   async function saveEncryptedAINote(text) {
     if (!selected || !text?.trim()) return;
@@ -3513,7 +4068,7 @@ async function executeAcceptFriendRequest(requestId) {
       }
     }
   }
-async function handleToggleVault(peerId) {
+  async function handleToggleVault(peerId) {
     if (isPeerVaulted(peerId)) {
       try {
         await removeVaultPeer(peerId);
@@ -3579,59 +4134,164 @@ async function handleToggleVault(peerId) {
       setConfirmBusy(false);
     }
   }
-
   function handleClearChat() {
     if (!selected) return;
-    setConfirmDialog({
-      type: "clear-chat",
-      selectionType: selected.type,
-      selectionId: selected.id,
-      title: "Clear this chat?",
-      message:
-        "Previous messages will be removed from this chat for you and can’t be easily undone. The conversation stays in your list, and you can still send and receive new messages.",
-      confirmLabel: "Clear chat",
-      danger: true,
-    });
+    setClearChatOpen(true);
   }
 
-  async function executeClearChat(dialog) {
-    const type = dialog?.selectionType;
-    const id = dialog?.selectionId;
-    if (!type || !id) {
-      setConfirmDialog(null);
-      return;
+  async function executeClearChatScoped(scopes) {
+    if (!selected) return;
+    const type = selected.type;
+    const id = selected.id;
+    const conversationKey = selected.key;
+    const clearingStarred = scopes.includes("starred");
+    const CONTENT_SCOPES = ["photo", "video", "voice", "document", "text"];
+    let serverScopes = scopes.filter((s) => s !== "starred");
+    // Selecting every content type is a full clear — use the single 'all'
+    // watermark so we don't leave five overlapping scoped entries.
+    if (CONTENT_SCOPES.every((k) => serverScopes.includes(k))) {
+      serverScopes = ["all"];
     }
+
+    // Snapshot for Undo (toast stays up ~8s).
+    const previousClearedEntries = (user.clearedConversations || [])
+      .filter((c) => c && c.conversationKey === conversationKey)
+      .map((c) => ({
+        conversationKey: c.conversationKey,
+        scope: c.scope || "all",
+        clearedAt: c.clearedAt,
+      }));
+    const previousMessages =
+      selectedRef.current &&
+      selectedRef.current.type === type &&
+      String(selectedRef.current.id) === String(id)
+        ? messages
+        : null;
+    const previousStarredEntries = clearingStarred
+      ? getStarredEntries(user.id)
+      : null;
+
     try {
-      setConfirmBusy(true);
-      const payload = type === "group" ? { groupId: id } : { peerId: id };
-      const { data } = await client.post("/users/me/clear-chat", payload);
-      // Server confirmed — persist the updated watermarks to the session, then
-      // (and only then) empty the visible thread. No optimistic clear: if the
-      // request had failed, the existing messages stay intact. Guard on the
-      // still-open conversation so a fast switch doesn't blank a different chat.
-      if (data?.data) updateSessionUser(data.data);
+      setClearChatBusy(true);
+
+      if (serverScopes.length) {
+        const payload =
+          type === "group"
+            ? { groupId: id, scopes: serverScopes }
+            : { peerId: id, scopes: serverScopes };
+        const { data } = await client.post("/users/me/clear-chat", payload);
+        // Server confirmed — persist the updated watermarks to the session.
+        // No optimistic clear: if the request had failed, existing messages
+        // stay intact.
+        if (data?.data) updateSessionUser(data.data);
+      }
+
+      if (clearingStarred) {
+        setStarredIds(clearAllStarred(user.id));
+      }
+
       const current = selectedRef.current;
       if (current && current.type === type && String(current.id) === String(id)) {
-        setMessages([]);
+        if (serverScopes.includes("all")) {
+          setMessages([]);
+        } else if (serverScopes.length) {
+          // Re-fetch rather than blanking outright — a scoped clear (e.g. just
+          // photos) should still leave the remaining messages visible.
+          setLoadingMessages(true);
+          const endpoint = type === "group" ? `/groups/${id}/messages` : `/messages/${id}`;
+          try {
+            const res = await client.get(endpoint, { params: { limit: 80, markRead: 0 } });
+            setMessages((res.data.data || []).map((raw) => decorateRef.current(raw)));
+          } finally {
+            setLoadingMessages(false);
+          }
+        }
       }
-      showToast("Chat cleared", "success");
-      setConfirmDialog(null);
+
+      const toastLabel = serverScopes.includes("all")
+        ? "Chat cleared"
+        : serverScopes.length
+          ? "Selected messages cleared"
+          : clearingStarred
+            ? "Starred messages cleared"
+            : "Chat cleared";
+
+      let undoUsed = false;
+      showToast(toastLabel, "success", 8000, {
+        actionLabel: "Undo",
+        onAction: () => {
+          if (undoUsed) return;
+          undoUsed = true;
+          void undoClearChat({
+            type,
+            id,
+            previousClearedEntries,
+            previousMessages,
+            previousStarredEntries,
+            hadServerClear: serverScopes.length > 0,
+          });
+        },
+      });
+      setClearChatOpen(false);
     } catch (err) {
       showToast(err.response?.data?.error || "Failed to clear chat", "error");
-      setConfirmDialog(null);
     } finally {
-      setConfirmBusy(false);
+      setClearChatBusy(false);
     }
   }
-async function handleUnblockUser(peerId) {
-  try {
-    const { data } = await client.delete(`/users/${peerId}/block`);
-    updateSessionUser(data.data);
-    showToast('User unblocked', 'success');
-  } catch (err) {
-    showToast(err.response?.data?.error || 'Failed to unblock', 'error');
+
+  async function undoClearChat({
+    type,
+    id,
+    previousClearedEntries,
+    previousMessages,
+    previousStarredEntries,
+    hadServerClear,
+  }) {
+    try {
+      if (hadServerClear) {
+        const payload =
+          type === "group"
+            ? { groupId: id, restoreEntries: previousClearedEntries }
+            : { peerId: id, restoreEntries: previousClearedEntries };
+        const { data } = await client.post("/users/me/clear-chat/undo", payload);
+        if (data?.data) updateSessionUser(data.data);
+      }
+
+      if (previousStarredEntries) {
+        setStarredIds(restoreStarredEntries(user.id, previousStarredEntries));
+      }
+
+      const current = selectedRef.current;
+      if (current && current.type === type && String(current.id) === String(id)) {
+        if (Array.isArray(previousMessages)) {
+          setMessages(previousMessages);
+        } else {
+          setLoadingMessages(true);
+          const endpoint = type === "group" ? `/groups/${id}/messages` : `/messages/${id}`;
+          try {
+            const res = await client.get(endpoint, { params: { limit: 80, markRead: 0 } });
+            setMessages((res.data.data || []).map((raw) => decorateRef.current(raw)));
+          } finally {
+            setLoadingMessages(false);
+          }
+        }
+      }
+
+      showToast("Clear undone", "success", 2500);
+    } catch (err) {
+      showToast(err.response?.data?.error || "Could not undo clear", "error");
+    }
   }
-}
+  async function handleUnblockUser(peerId) {
+    try {
+      const { data } = await client.delete(`/users/${peerId}/block`);
+      updateSessionUser(data.data);
+      showToast('User unblocked', 'success');
+    } catch (err) {
+      showToast(err.response?.data?.error || 'Failed to unblock', 'error');
+    }
+  }
   // Keydown to trigger search (Ctrl+K)
   useEffect(() => {
     function handleGlobalKeyDown(e) {
@@ -3701,6 +4361,7 @@ async function handleUnblockUser(peerId) {
     } else if (selected.type === "group") {
       presenceTypingRef.current = { to: null, groupId: String(selected.id) };
       if (socket?.connected) {
+        console.log('[TYPING-DBG] emitting typing:start for group', selected.id);
         socket.emit("typing:start", { groupId: String(selected.id) });
         clearTimeout(typingTimeoutRef.current);
         typingTimeoutRef.current = setTimeout(() => {
@@ -3896,7 +4557,7 @@ async function handleUnblockUser(peerId) {
           prompt.replace(/@QuantumAI\b/gi, "").trim() ||
           "Help with this conversation.",
         context,
-        link: { groupId: selected.id },
+        link: { groupId: selected.id, quantumChatPeerId: user.id },
         ephemeral: true,
         signal: controller.signal,
         onDone: (payload) => {
@@ -3960,11 +4621,7 @@ async function handleUnblockUser(peerId) {
       return;
     }
 
-    const socket = getSocket();
-    if (socket && selected.type === "dm")
-      socket.emit("typing:stop", { to: selected.id });
-    clearTimeout(typingTimeoutRef.current);
-    presenceTypingRef.current = { to: null, groupId: null };
+  stopTyping();
 
     try {
       if (
@@ -4005,9 +4662,11 @@ async function handleUnblockUser(peerId) {
             ),
           );
         } else {
-          const peer = resolveDmPeer(selected);
           const myKey = pickRandom(getCurrentKeySet(user.id));
-          const recipientKeys = (peer?.publicKeys || []).filter(Boolean);
+          let recipientKeys = (resolveDmPeer(selected)?.publicKeys || []).filter(Boolean);
+          if (recipientKeys.length === 0 && selected) {
+            recipientKeys = await ensurePeerKeys(selected);
+          }
           if (!myKey?.publicKey || recipientKeys.length === 0) {
             showToast("Missing encryption keys for this conversation", "error");
             return;
@@ -4053,9 +4712,29 @@ async function handleUnblockUser(peerId) {
         const plaintext = asAnnouncement
           ? encodeAnnouncement(bodyText)
           : bodyText;
-        const mentionedUserIds = extractMentions(bodyText, group.members || []);
+               const allMentionedUserIds = extractMentions(bodyText, group.members || []);
+        const mentionedUserIds = allMentionedUserIds.filter((mid) => {
+          const member = (group.members || []).find((m) => String(memberId(m)) === String(mid));
+          return member ? !mentionBlockReason(member) : true;
+        });
+        if (mentionedUserIds.length < allMentionedUserIds.length) {
+          const blockedNames = allMentionedUserIds
+            .filter((mid) => !mentionedUserIds.includes(mid))
+            .map((mid) => {
+              const member = (group.members || []).find((m) => String(memberId(m)) === String(mid));
+              return member?.username;
+            })
+            .filter(Boolean);
+          if (blockedNames.length) {
+            showToast(
+              `${blockedNames.join(", ")} won't be notified — mentions are turned off for them`,
+              "info",
+            );
+          }
+        }
         const kind = asAnnouncement ? "announcement" : "text";
-        const tempId = `tmp-${crypto.randomUUID()}`;
+        const clientMessageId = crypto.randomUUID();
+        const tempId = `outbox-${clientMessageId}`;
         const replySnapshot = replyTo;
         const draftSnapshot = draft;
 
@@ -4095,6 +4774,7 @@ async function handleUnblockUser(peerId) {
             kind,
             mentionedUserIds,
             tempId,
+            clientMessageId,
             displayText: plaintext,
             replyToId: replySnapshot
               ? replySnapshot.id || replySnapshot._id
@@ -4104,27 +4784,37 @@ async function handleUnblockUser(peerId) {
             await invokeGroupQuantumAI(bodyText, group);
           }
         } catch (err) {
-          setMessages((prev) =>
-            prev.filter((m) => String(m.id || m._id) !== tempId),
-          );
-          setDraft(draftSnapshot);
-          setReplyTo(replySnapshot);
+          if (isRetryableSendError(err)) {
+            setMessages((prev) => prev.map((m) =>
+              String(m.id || m._id) === tempId ? { ...m, _status: "waiting" } : m,
+            ));
+          } else {
+            await removeOfflineMessage(user.id, clientMessageId);
+            setMessages((prev) => prev.filter((m) => String(m.id || m._id) !== tempId));
+            setDraft(draftSnapshot);
+            setReplyTo(replySnapshot);
+          }
           throw err;
         }
       } else {
-        const peer = resolveDmPeer(selected);
         const myKey = pickRandom(getCurrentKeySet(user.id));
-        const recipientKeys = (peer?.publicKeys || []).filter(Boolean);
+        let recipientKeys = (resolveDmPeer(selected)?.publicKeys || []).filter(Boolean);
+        if (recipientKeys.length === 0 && selected) {
+          recipientKeys = await ensurePeerKeys(selected);
+        }
         if (!myKey?.publicKey || recipientKeys.length === 0) {
           showToast("Missing encryption keys for this conversation", "error");
           return;
         }
         const draftSnapshot = draft;
         const replySnapshot = replyTo;
-        const tempId = `tmp-${crypto.randomUUID()}`;
+        const clientMessageId = crypto.randomUUID();
+        const tempId = `outbox-${clientMessageId}`;
         const plaintext = draft;
 
         setDraft("");
+        setCapsuleUnlocksAt("");
+        setShowCapsulePicker(false);
         setReplyTo(null);
         setMentionOpen(false);
         if (textareaRef.current) textareaRef.current.style.height = "auto";
@@ -4157,11 +4847,25 @@ async function handleUnblockUser(peerId) {
           const forRecipient = sealMessage(plaintext, pickRandom(recipientKeys));
           const forSender = sealMessage(plaintext, myKey.publicKey);
           const body = { to: selected.id, forRecipient, forSender };
+          body.clientMessageId = clientMessageId;
           if (replySnapshot) body.replyTo = replySnapshot.id || replySnapshot._id;
           if (disappearSeconds > 0) body.expiresInSeconds = disappearSeconds;
+          if (capsuleUnlocksAt) {
+            body.timeCapsule = true;
+            body.unlocksAt = new Date(capsuleUnlocksAt).toISOString();
+          }
           const forwardPolicy = buildForwardPolicy();
           if (forwardPolicy) body.forwardPolicy = forwardPolicy;
+          await saveOfflineMessage(user.id, {
+            id: clientMessageId,
+            type: "dm",
+            conversationId: selected.id,
+            conversationKey: selected.key,
+            displayText: plaintext,
+            payload: body,
+          });
           const { data } = await client.post("/messages", body);
+          await removeOfflineMessage(user.id, clientMessageId);
           recordActivityFromMessage(data.data);
           setMessages((prev) =>
             mergeConfirmedMessage(prev, {
@@ -4171,11 +4875,16 @@ async function handleUnblockUser(peerId) {
             }),
           );
         } catch (err) {
-          setMessages((prev) =>
-            prev.filter((m) => String(m.id || m._id) !== tempId),
-          );
-          setDraft(draftSnapshot);
-          setReplyTo(replySnapshot);
+          if (isRetryableSendError(err)) {
+            setMessages((prev) => prev.map((m) =>
+              String(m.id || m._id) === tempId ? { ...m, _status: "waiting" } : m,
+            ));
+          } else {
+            await removeOfflineMessage(user.id, clientMessageId);
+            setMessages((prev) => prev.filter((m) => String(m.id || m._id) !== tempId));
+            setDraft(draftSnapshot);
+            setReplyTo(replySnapshot);
+          }
           throw err;
         }
       }
@@ -4188,28 +4897,28 @@ async function handleUnblockUser(peerId) {
       }
     }
   }
-async function sendGifMessage(gifUrl) {
-  if (!selected || gifSending) return;
-  setGifSending(true);
-  try {
-    const resp = await fetch(gifUrl);
-    if (!resp.ok) throw new Error('Could not download GIF');
-    const blob = await resp.blob();
-    const file = new File([blob], `gif-${Date.now()}.gif`, {
-      type: blob.type || 'image/gif',
-    });
-    await sendAttachmentFile(file, { quiet: true });
-    setGifPickerOpen(false);
-    setGifQuery('');
-    setGifResults([]);
-  } catch (err) {
-    if (!handleNotFriendsError(err, selected?.id)) {
-      showToast(err.message || 'Failed to send GIF — try again', 'error');
+  async function sendGifMessage(gifUrl) {
+    if (!selected || gifSending) return;
+    setGifSending(true);
+    try {
+      const resp = await fetch(gifUrl);
+      if (!resp.ok) throw new Error('Could not download GIF');
+      const blob = await resp.blob();
+      const file = new File([blob], `gif-${Date.now()}.gif`, {
+        type: blob.type || 'image/gif',
+      });
+      await sendAttachmentFile(file, { quiet: true });
+      setGifPickerOpen(false);
+      setGifQuery('');
+      setGifResults([]);
+    } catch (err) {
+      if (!handleNotFriendsError(err, selected?.id)) {
+        showToast(err.message || 'Failed to send GIF — try again', 'error');
+      }
+    } finally {
+      setGifSending(false);
     }
-  } finally {
-    setGifSending(false);
   }
-}
   // Uploads one already-encrypted blob to our proxy endpoint (POST
   // /attachments/init hands back the pendingUploadId this targets), which
   // forwards the bytes to Cloudinary.
@@ -4228,7 +4937,55 @@ async function sendGifMessage(gifUrl) {
     return undefined;
   }
 
-  async function sendAttachmentFile(file, { plainBytes, quiet, viewOnce = false } = {}) {
+  // Large-file path: same durable result as putCiphertext, but sent as
+  // sequential small requests instead of one big body — Vercel's
+  // serverless functions reject an oversized single request body outright,
+  // which is what actually broke video uploads.
+    async function putCiphertextChunked(
+    cipherBytes,
+    { pendingUploadId, slot, signal, onProgress },
+  ) {
+    const total = cipherBytes.byteLength;
+    const totalChunks = Math.max(1, Math.ceil(total / CHUNK_SIZE));
+    const CONCURRENCY = 4; // parallel round-trips per slot — chunks carry their own index, order doesn't matter server-side
+    const loadedByChunk = new Array(totalChunks).fill(0);
+    const report = () => {
+      const sent = loadedByChunk.reduce((a, b) => a + b, 0);
+      onProgress?.({ loaded: sent, total });
+    };
+
+    async function uploadChunk(chunkIndex) {
+      const start = chunkIndex * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, total);
+      const chunkBlob = new Blob([cipherBytes.subarray(start, end)], {
+        type: "application/octet-stream",
+      });
+
+      await client.put(
+        `/attachments/pending/${pendingUploadId}/chunk?slot=${slot}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}`,
+        chunkBlob,
+        { signal, headers: { "Content-Type": "application/octet-stream" } },
+      );
+
+      loadedByChunk[chunkIndex] = end - start;
+      report();
+    }
+
+    let nextIndex = 0;
+    async function worker() {
+      while (nextIndex < totalChunks) {
+        const chunkIndex = nextIndex;
+        nextIndex += 1;
+        await uploadChunk(chunkIndex);
+      }
+    }
+
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, totalChunks) }, worker),
+    );
+    return undefined;
+  }
+  async function sendAttachmentFile(file, { plainBytes, quiet, viewOnce = false, offlineId, skipOutbox = false, offlineEntry } = {}) {
     if (
       !file ||
       !selected ||
@@ -4244,25 +5001,54 @@ async function sendGifMessage(gifUrl) {
       return;
     }
 
-    const uploadId = crypto.randomUUID();
+    const uploadId = offlineId || crypto.randomUUID();
     const controller = new AbortController();
     setUploads((prev) => [
       ...prev,
       { id: uploadId, name: file.name, progress: 0, controller },
     ]);
+    const pendingMessageId = `outbox-${uploadId}`;
+    setMessages((prev) => {
+      if (prev.some((message) => String(message.id || message._id) === pendingMessageId)) return prev;
+      return [...prev, {
+        id: pendingMessageId,
+        _id: pendingMessageId,
+        from: user.id,
+        ...(selected.type === "group" ? { group: selected.id } : { to: selected.id }),
+        text: file.name || "Attachment",
+        createdAt: new Date().toISOString(),
+        _status: "sending",
+        _pending: true,
+        _mediaPending: true,
+      }];
+    });
 
     try {
       if (selected.type === "group") {
         const fileBytes =
           plainBytes || new Uint8Array(await file.arrayBuffer());
-        const sealed = secretboxSeal(fileBytes);
+        const sealed = await secretboxSealAsync(fileBytes);
+        if (!skipOutbox) await saveOfflineMedia(user.id, {
+          id: uploadId,
+          type: "group",
+          conversationId: selected.id,
+          conversationKey: selected.key,
+          filename: file.name,
+          mimetype: file.type || "application/octet-stream",
+          viewOnce,
+          sealedKey: sealed.key,
+          sealedNonce: sealed.nonce,
+          sourceBytes: fileBytes,
+        });
         const mimeType = file.type || "application/octet-stream";
         const cipherBlob = new Blob([sealed.cipherBytes], { type: mimeType });
+        const useChunked = sealed.cipherBytes.byteLength > CHUNK_SIZE;
 
         const initRes = await client.post(
           "/attachments/init",
           {
             groupId: selected.id,
+            clientUploadId: uploadId,
             secretboxNonce: sealed.nonce,
             filename: file.name,
             mimetype: mimeType,
@@ -4270,38 +5056,49 @@ async function sendGifMessage(gifUrl) {
           },
           { signal: controller.signal },
         );
-        const { pendingUploadId } = initRes.data.data;
+        const initData = initRes.data.data;
+        const pendingUploadId = initData.pendingUploadId;
+        let attachment = initData.finalizedAttachmentId
+          ? { id: initData.finalizedAttachmentId, filename: file.name, mimetype: mimeType, size: file.size }
+          : null;
 
-        const recipientDirectUploadId = await putCiphertext(
-          cipherBlob,
-          file.name,
-          {
-            pendingUploadId,
-            slot: "recipient",
-            signal: controller.signal,
-            onProgress: (event) => {
-              if (!event.total) return;
-              const progress = Math.min(
-                100,
-                Math.round((event.loaded / event.total) * 100),
-              );
-              setUploads((prev) =>
-                prev.map((u) => (u.id === uploadId ? { ...u, progress } : u)),
-              );
-            },
-          },
-        );
+        const onRecipientProgress = (event) => {
+          if (!event.total) return;
+          const progress = Math.min(
+            100,
+            Math.round((event.loaded / event.total) * 100),
+          );
+          setUploads((prev) =>
+            prev.map((u) => (u.id === uploadId ? { ...u, progress } : u)),
+          );
+        };
 
-        const finalizeRes = await client.post(
-          "/attachments/finalize",
-          { pendingUploadId, recipientDirectUploadId },
-          { signal: controller.signal },
-        );
-        const attachment = finalizeRes.data.data;
+        const recipientDirectUploadId = attachment ? undefined : (useChunked
+          ? await putCiphertextChunked(sealed.cipherBytes, {
+              pendingUploadId,
+              slot: "recipient",
+              signal: controller.signal,
+              onProgress: onRecipientProgress,
+            })
+          : await putCiphertext(cipherBlob, file.name, {
+              pendingUploadId,
+              slot: "recipient",
+              signal: controller.signal,
+              onProgress: onRecipientProgress,
+            }));
+        if (!attachment) {
+          const finalizeRes = await client.post(
+            "/attachments/finalize",
+            { pendingUploadId: initData.pendingUploadId, clientUploadId: uploadId, recipientDirectUploadId },
+            { signal: controller.signal },
+          );
+          attachment = finalizeRes.data.data;
+          await updateOfflineMedia(user.id, uploadId, { finalizedAttachmentId: attachment.id });
+        }
         const plaintext = encodeGroupFile({
           attachmentId: attachment.id,
-          key: sealed.key,
-          nonce: sealed.nonce,
+          key: offlineEntry?.sealedKey || sealed.key,
+          nonce: offlineEntry?.sealedNonce || sealed.nonce,
           filename: attachment.filename || file.name,
           mimetype:
             attachment.mimetype || file.type || "application/octet-stream",
@@ -4311,26 +5108,47 @@ async function sendGifMessage(gifUrl) {
         await sendGroupPayload(plaintext, {
           kind: "file",
           attachmentId: attachment.id,
+          clientMessageId: uploadId,
+          tempId: pendingMessageId,
           ...(wantViewOnce ? { viewOnce: true } : {}),
         });
+        await removeOfflineMedia(user.id, uploadId);
         playSendSound();
         if (!quiet) showToast("File sent successfully", "success", 3000);
         setTimeout(() => scrollToBottom("smooth"), 50);
         return;
       }
 
-      const peer = resolveDmPeer(selected);
       const myKey = pickRandom(getCurrentKeySet(user.id));
-      const recipientKeys = (peer?.publicKeys || []).filter(Boolean);
+      let recipientKeys = (resolveDmPeer(selected)?.publicKeys || []).filter(Boolean);
+      if (recipientKeys.length === 0 && selected) {
+        recipientKeys = await ensurePeerKeys(selected);
+      }
       if (!myKey?.publicKey || recipientKeys.length === 0) {
         showToast("Missing encryption keys for this conversation", "error");
         return;
       }
       const recipientPublicKey = pickRandom(recipientKeys);
       const fileBytes = plainBytes || new Uint8Array(await file.arrayBuffer());
-      const forRecipientFile = sealBytes(fileBytes, recipientPublicKey);
-      const forSenderFile = sealBytes(fileBytes, myKey.publicKey);
+      if (!skipOutbox) await saveOfflineMedia(user.id, {
+        id: uploadId,
+        type: "dm",
+        conversationId: selected.id,
+        conversationKey: selected.key,
+        filename: file.name,
+        mimetype: file.type || "application/octet-stream",
+        viewOnce,
+        sourceBytes: fileBytes,
+      });
+      // Safe to run concurrently: each call only transfers its OWN output
+      // buffer back (see cryptoWorker.js) — fileBytes itself is never
+      // transferred, so there's nothing shared to race on.
+      const [forRecipientFile, forSenderFile] = await Promise.all([
+        sealBytesAsync(fileBytes, recipientPublicKey),
+        sealBytesAsync(fileBytes, myKey.publicKey),
+      ]);
       const mimeType = file.type || "application/octet-stream";
+      const useChunked = forRecipientFile.cipherBytes.byteLength > CHUNK_SIZE;
       const recipientBlob = new Blob([forRecipientFile.cipherBytes], {
         type: mimeType,
       });
@@ -4342,6 +5160,7 @@ async function sendGifMessage(gifUrl) {
         "/attachments/init",
         {
           recipientId: selected.id,
+          clientUploadId: uploadId,
           filename: file.name,
           mimetype: mimeType,
           size: recipientBlob.size,
@@ -4354,7 +5173,10 @@ async function sendGifMessage(gifUrl) {
         },
         { signal: controller.signal },
       );
-      const { pendingUploadId, sender } = initRes.data.data;
+      const initData = initRes.data.data;
+      const existingAttachmentId = initData.finalizedAttachmentId;
+      const pendingUploadId = initData.pendingUploadId;
+      const sender = initData.sender;
 
       let recipientLoaded = 0;
       let senderLoaded = 0;
@@ -4369,42 +5191,72 @@ async function sendGifMessage(gifUrl) {
           prev.map((u) => (u.id === uploadId ? { ...u, progress } : u)),
         );
       };
-      const recipientDirectUploadId = await putCiphertext(
-        recipientBlob,
-        file.name,
-        {
-          pendingUploadId,
-          slot: "recipient",
-          signal: controller.signal,
-          onProgress: (event) => {
-            recipientLoaded = event.loaded || 0;
-            reportProgress();
-          },
-        },
-      );
-      const senderDirectUploadId = sender
-        ? await putCiphertext(senderBlob, file.name, {
+      const recipientUploadPromise = existingAttachmentId ? Promise.resolve(undefined) : (useChunked
+        ? putCiphertextChunked(forRecipientFile.cipherBytes, {
             pendingUploadId,
-            slot: "sender",
+            slot: "recipient",
             signal: controller.signal,
             onProgress: (event) => {
-              senderLoaded = event.loaded || 0;
+              recipientLoaded = event.loaded || 0;
               reportProgress();
             },
           })
-        : undefined;
+        : putCiphertext(recipientBlob, file.name, {
+            pendingUploadId,
+            slot: "recipient",
+            signal: controller.signal,
+            onProgress: (event) => {
+              recipientLoaded = event.loaded || 0;
+              reportProgress();
+            },
+          }));
 
-      const finalizeRes = await client.post(
-        "/attachments/finalize",
-        { pendingUploadId, recipientDirectUploadId, senderDirectUploadId },
-        { signal: controller.signal },
-      );
-      const attachmentId = finalizeRes.data.data.id;
+      const senderUploadPromise = existingAttachmentId ? Promise.resolve(undefined) : (sender
+        ? useChunked
+          ? putCiphertextChunked(forSenderFile.cipherBytes, {
+              pendingUploadId,
+              slot: "sender",
+              signal: controller.signal,
+              onProgress: (event) => {
+                senderLoaded = event.loaded || 0;
+                reportProgress();
+              },
+            })
+          : putCiphertext(senderBlob, file.name, {
+              pendingUploadId,
+              slot: "sender",
+              signal: controller.signal,
+              onProgress: (event) => {
+                senderLoaded = event.loaded || 0;
+                reportProgress();
+              },
+            })
+        : Promise.resolve(undefined));
+
+      // Recipient and sender ciphertext are independent objects server-side
+      // — concurrent upload roughly halves wall-clock time versus two full
+      // round trips back to back.
+      const [recipientDirectUploadId, senderDirectUploadId] = await Promise.all([
+        recipientUploadPromise,
+        senderUploadPromise,
+      ]);
+
+      let attachmentId = existingAttachmentId;
+      if (!attachmentId) {
+        const finalizeRes = await client.post(
+          "/attachments/finalize",
+          { pendingUploadId, clientUploadId: uploadId, recipientDirectUploadId, senderDirectUploadId },
+          { signal: controller.signal },
+        );
+        attachmentId = finalizeRes.data.data.id;
+        await updateOfflineMedia(user.id, uploadId, { finalizedAttachmentId: attachmentId });
+      }
 
       const forRecipient = sealMessage("", recipientPublicKey);
       const forSender = sealMessage("", myKey.publicKey);
       const msgBody = {
         to: selected.id,
+        clientMessageId: uploadId,
         forRecipient,
         forSender,
         attachmentId,
@@ -4415,12 +5267,14 @@ async function sendGifMessage(gifUrl) {
       const forwardPolicy = buildForwardPolicy();
       if (forwardPolicy && !wantViewOnce) msgBody.forwardPolicy = forwardPolicy;
       const { data } = await client.post("/messages", msgBody);
+      await removeOfflineMedia(user.id, uploadId);
       recordActivityFromMessage(data.data);
-      setMessages((prev) => {
-        const id = String(data.data.id || data.data._id);
-        if (prev.some((m) => String(m.id || m._id) === id)) return prev;
-        return [...prev, decorate(data.data)];
-      });
+      setMessages((prev) => mergeConfirmedMessage(prev, {
+        tempId: pendingMessageId,
+        serverRaw: data.data,
+        displayText: file.name,
+      }));
+      void markMessageImportantIfNeeded(data.data);
       playSendSound();
       if (!quiet) showToast("File sent successfully", "success", 3000);
       setTimeout(() => scrollToBottom("smooth"), 50);
@@ -4435,11 +5289,46 @@ async function sendGifMessage(gifUrl) {
           "error",
         );
       }
+      if (isRetryableSendError(err)) {
+        setMessages((prev) => prev.map((message) =>
+          String(message.id || message._id) === pendingMessageId
+            ? { ...message, _status: "waiting" }
+            : message,
+        ));
+      } else {
+        setMessages((prev) => prev.filter((message) => String(message.id || message._id) !== pendingMessageId));
+      }
     } finally {
       setUploads((prev) => prev.filter((u) => u.id !== uploadId));
     }
   }
 
+  async function retryOfflineMediaForSelection() {
+    if (!navigator.onLine || !user?.id || !selected?.key) return;
+    const entries = (await getOfflineMedia(user.id)).filter(
+      (entry) => entry.conversationKey === selected.key,
+    );
+    for (const entry of entries) {
+      const file = new File([entry.sourceBytes], entry.filename || 'attachment', {
+        type: entry.mimetype || 'application/octet-stream',
+      });
+      await sendAttachmentFile(file, {
+        plainBytes: entry.sourceBytes,
+        viewOnce: entry.viewOnce === true,
+        offlineId: entry.id,
+        skipOutbox: true,
+        offlineEntry: entry,
+        quiet: true,
+      });
+    }
+  }
+
+  useEffect(() => {
+    const retry = () => retryOfflineMediaForSelection().catch(() => {});
+    window.addEventListener('online', retry);
+    retry();
+    return () => window.removeEventListener('online', retry);
+  }, [selected?.key, user?.id]);
   async function sendAttachmentFiles(filesOrFile, { viewOnce = false } = {}) {
     const list = Array.isArray(filesOrFile)
       ? filesOrFile
@@ -4456,20 +5345,37 @@ async function sendGifMessage(gifUrl) {
 
     let ok = 0;
     let failed = 0;
-    for (const file of files) {
-      try {
-        await sendAttachmentFile(file, { quiet: files.length > 1, viewOnce });
-        ok += 1;
-      } catch (err) {
-        failed += 1;
-        showToast(
-          err.response?.data?.error ||
-          err.message ||
-          `Failed to send ${file.name}`,
-          "error",
-        );
+    // A handful of files in flight at once — each does its own encryption
+    // (queued safely on the shared crypto worker) and its own upload, so
+    // this is a real speedup for a multi-photo batch without saturating
+    // the network the way, say, 20-at-once would.
+    const FILE_CONCURRENCY = 3;
+    let nextIndex = 0;
+
+    async function worker() {
+      while (nextIndex < files.length) {
+        const i = nextIndex;
+        nextIndex += 1;
+        const file = files[i];
+        try {
+          await sendAttachmentFile(file, { quiet: files.length > 1, viewOnce });
+          ok += 1;
+        } catch (err) {
+          failed += 1;
+          showToast(
+            err.response?.data?.error ||
+            err.message ||
+            `Failed to send ${file.name}`,
+            "error",
+          );
+        }
       }
     }
+
+    await Promise.all(
+      Array.from({ length: Math.min(FILE_CONCURRENCY, files.length) }, worker),
+    );
+
     if (files.length > 1 && ok > 0) {
       showToast(
         `${ok} file${ok === 1 ? "" : "s"} sent${failed ? `, ${failed} failed` : ""}`,
@@ -4501,21 +5407,63 @@ async function sendGifMessage(gifUrl) {
     }
 
     if (mediaFiles.length) {
-      setMediaPreview({ files: mediaFiles, index: 0, viewOnce: false });
+      setMediaPreview({ files: mediaFiles, index: 0, viewOnce: false, compress: false });
+    }
+  }
+  // WhatsApp-style bulk send: commits every picked photo/video at once
+  // instead of tapping Send once per item. Deliberately skips per-item
+  // view-once/compress — those stay on the one-at-a-time flow below, since
+  // asking per-photo would defeat the point of a bulk action.
+  async function handleSendAllMedia() {
+    if (!mediaPreview || mediaPreviewSending || mediaCompressing) return;
+    const files = mediaPreview.files;
+    if (!files?.length) {
+      setMediaPreview(null);
+      return;
+    }
+    setMediaPreviewSending(true);
+    try {
+      await sendAttachmentFiles(files);
+    } finally {
+      setMediaPreviewSending(false);
+      setMediaPreview(null);
     }
   }
 
   async function handleMediaPreviewSend() {
-    if (!mediaPreview || mediaPreviewSending) return;
+    if (!mediaPreview || mediaPreviewSending || mediaCompressing) return;
     const file = mediaPreview.files[mediaPreview.index];
     if (!file) {
       setMediaPreview(null);
       return;
     }
 
+    let fileToSend = file;
+    if (mediaPreview.compress && String(file.type || "").startsWith("video/")) {
+      setMediaCompressing(true);
+      setMediaCompressProgress(0);
+      try {
+        fileToSend = await compressVideo(
+          file,
+          (progress) => setMediaCompressProgress(progress),
+          (phase) => setMediaCompressPhase(phase),
+        );
+      } catch (err) {
+        showToast(
+          err.message || "Compression failed — sending original video",
+          "error",
+        );
+        fileToSend = file;
+      } finally {
+        setMediaCompressing(false);
+        setMediaCompressProgress(0);
+        setMediaCompressPhase('encoding');
+      }
+    }
+
     setMediaPreviewSending(true);
     try {
-      await sendAttachmentFile(file, {
+      await sendAttachmentFile(fileToSend, {
         viewOnce: mediaPreview.viewOnce,
         quiet: mediaPreview.files.length > 1,
       });
@@ -4525,6 +5473,7 @@ async function sendGifMessage(gifUrl) {
           files: mediaPreview.files,
           index: nextIndex,
           viewOnce: false,
+          compress: false,
         });
       } else {
         setMediaPreview(null);
@@ -4637,6 +5586,17 @@ async function sendGifMessage(gifUrl) {
       items.findIndex((it) => it.id === String(id)),
     );
     setGallery({ items, index: index < 0 ? 0 : index });
+  }
+
+  function handleVideoReady(id, src, filename) {
+    if (!id || !src) return;
+    videoSrcMapRef.current.set(String(id), { src, alt: filename || "Video" });
+  }
+
+  function handleVideoPreview(id) {
+    const entry = videoSrcMapRef.current.get(String(id));
+    if (!entry) return;
+    setVideoPlayer({ src: entry.src, filename: entry.alt });
   }
 
   function clearRecordingResources({ keepChunks = false } = {}) {
@@ -4788,33 +5748,33 @@ async function sendGifMessage(gifUrl) {
         mediaStreamRef.current.getTracks().forEach((t) => t.stop());
     };
   }, []);
-useEffect(() => {
-  if (!pendingJumpMessageId) return;
-  const el = document.getElementById(`msg-${pendingJumpMessageId}`);
-  if (el) {
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
-    el.style.animation = "none";
-    el.offsetHeight;
-    el.style.animation = "msgIn 400ms ease both";
-    setPendingJumpMessageId(null);
-  }
-}, [messages, pendingJumpMessageId]);
-
-useEffect(() => {
-  if (!pendingJumpMessageId || !selected || loadingMessages) return;
-  const idStr = String(pendingJumpMessageId);
-  const found = messages.some((m) => String(m.id || m._id) === idStr);
-  if (found) return; // the other effect (scroll-into-view) will handle it
-  if (!hasMoreMessages || loadingOlderRef.current) {
-    // Nothing more to load and still not found — give up gracefully.
-    if (!hasMoreMessages) {
+  useEffect(() => {
+    if (!pendingJumpMessageId) return;
+    const el = document.getElementById(`msg-${pendingJumpMessageId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.style.animation = "none";
+      el.offsetHeight;
+      el.style.animation = "msgIn 400ms ease both";
       setPendingJumpMessageId(null);
-      showToast("Couldn't locate that message — it may have been deleted", "info");
     }
-    return;
-  }
-  loadOlderMessages();
-}, [pendingJumpMessageId, selected, messages, hasMoreMessages, loadingMessages, loadOlderMessages, showToast]);
+  }, [messages, pendingJumpMessageId]);
+
+  useEffect(() => {
+    if (!pendingJumpMessageId || !selected || loadingMessages) return;
+    const idStr = String(pendingJumpMessageId);
+    const found = messages.some((m) => String(m.id || m._id) === idStr);
+    if (found) return; // the other effect (scroll-into-view) will handle it
+    if (!hasMoreMessages || loadingOlderRef.current) {
+      // Nothing more to load and still not found — give up gracefully.
+      if (!hasMoreMessages) {
+        setPendingJumpMessageId(null);
+        showToast("Couldn't locate that message — it may have been deleted", "info");
+      }
+      return;
+    }
+    loadOlderMessages();
+  }, [pendingJumpMessageId, selected, messages, hasMoreMessages, loadingMessages, loadOlderMessages, showToast]);
   function handleDeleteMessage(messageId) {
     if (!messageId) return;
     setConfirmDialog({
@@ -4855,17 +5815,68 @@ useEffect(() => {
     );
   }
 
- function handleStarMessage(messageId) {
-  if (!messageId || !selected) return;
-  const msg = messages.find((m) => String(m.id || m._id) === String(messageId));
-  const nextIds = toggleStarredMessage(
-    user.id,
-    msg || { id: messageId },
-    { key: selected.key, type: selected.type, id: selected.id, title: selected.title },
-  );
-  setStarredIds(nextIds);
-  setExtrasTick((n) => n + 1);
-}
+  function handleStarMessage(messageId) {
+    if (!messageId || !selected) return;
+    const msg = messages.find((m) => String(m.id || m._id) === String(messageId));
+    const nextIds = toggleStarredMessage(
+      user.id,
+      msg || { id: messageId },
+      { key: selected.key, type: selected.type, id: selected.id, title: selected.title },
+    );
+    setStarredIds(nextIds);
+    setExtrasTick((n) => n + 1);
+  }
+
+  async function handleImportantMessage(messageOrId) {
+    const messageId = String(messageOrId?.id || messageOrId?._id || messageOrId || '');
+    if (!messageId) return;
+    const message = typeof messageOrId === 'object'
+      ? messageOrId
+      : messages.find((candidate) => String(candidate.id || candidate._id) === messageId);
+    const previous = importantEntries;
+    const existing = previous.some((entry) => String(entry.id || entry._id) === messageId);
+
+    if (existing) {
+      const wasAutomatic = Boolean(getAutomaticImportantSource(message || previous.find((entry) => String(entry.id || entry._id) === messageId) || {}));
+      if (wasAutomatic) {
+        rememberAutoImportantRemoval(user.id, messageId);
+      }
+      setImportantEntries((current) => current.filter((entry) => String(entry.id || entry._id) !== messageId));
+      try {
+        await client.delete(`/messages/${messageId}/important`);
+        showToast('Removed from Important messages', 'success');
+      } catch (err) {
+        setImportantEntries(previous);
+        showToast(err.response?.data?.error || "Couldn't remove message. Try again.", 'error');
+      }
+      return;
+    }
+
+    clearAutoImportantRemoval(user.id, messageId);
+    const rawConversation = selected;
+    const optimistic = {
+      ...message,
+      id: messageId,
+      type: rawConversation?.type || (message?.group ? 'group' : 'dm'),
+      conversationId: rawConversation?.id || (message?.group ? message.group : message?.from),
+      conversationKey: rawConversation?.key || null,
+      title: rawConversation?.title || 'Chat',
+      isImportant: true,
+      important: true,
+      importantAt: new Date().toISOString(),
+      hasAttachment: Boolean(message?.attachment),
+      attachmentFilename: message?.attachment?.filename || null,
+      importantSource: getAutomaticImportantSource(message || {}),
+    };
+    setImportantEntries((current) => [optimistic, ...current]);
+    try {
+      await client.post(`/messages/${messageId}/important`);
+      showToast('Message saved to Important messages', 'success');
+    } catch (err) {
+      setImportantEntries(previous);
+      showToast(err.response?.data?.error || "Couldn't save message. Try again.", 'error');
+    }
+  }
 
   async function handlePinMessage(messageId) {
     if (!selected?.key) return;
@@ -4930,7 +5941,7 @@ useEffect(() => {
       replies,
     });
   }
-    function handleShowEditHistory(message) {
+  function handleShowEditHistory(message) {
     if (!message) return;
     setEditHistoryMessage(message);
   }
@@ -4978,9 +5989,11 @@ useEffect(() => {
         }
       }
 
-      const peer = resolveDmPeer(target);
       const myKey = pickRandom(getCurrentKeySet(user.id));
-      const recipientKeys = (peer?.publicKeys || []).filter(Boolean);
+      let recipientKeys = (resolveDmPeer(target)?.publicKeys || []).filter(Boolean);
+      if (recipientKeys.length === 0 && target) {
+        recipientKeys = await ensurePeerKeys(target);
+      }
       if (!myKey?.publicKey || recipientKeys.length === 0) {
         showToast("Missing encryption keys for this conversation", "error");
         return;
@@ -5054,10 +6067,6 @@ useEffect(() => {
       await executeDeleteMessage(confirmDialog.messageId);
       return;
     }
-    if (confirmDialog.type === "clear-chat") {
-      await executeClearChat(confirmDialog);
-      return;
-    }
     if (confirmDialog.type === "regenerate-keys") {
       await handleGenerateKeys();
     }
@@ -5103,8 +6112,10 @@ useEffect(() => {
         );
         recipientKeys = (member?.publicKeys || []).filter(Boolean);
       } else {
-        const peer = resolveDmPeer(selected);
-        recipientKeys = (peer?.publicKeys || []).filter(Boolean);
+        recipientKeys = (resolveDmPeer(selected)?.publicKeys || []).filter(Boolean);
+        if (recipientKeys.length === 0 && selected) {
+          recipientKeys = await ensurePeerKeys(selected);
+        }
       }
       if (!myKey?.publicKey || recipientKeys.length === 0) {
         showToast("Missing encryption keys for this conversation", "error");
@@ -5248,7 +6259,7 @@ useEffect(() => {
       }
     }
     if (chatTheme.wallpaperId === 'custom' && customWallpaperUrl) {
-      vars['--chat-wallpaper'] = `url(${customWallpaperUrl})`;
+      vars['--chat-wallpaper'] = `url("${customWallpaperUrl}") center/cover no-repeat`;
     } else if (chatTheme.wallpaperId && chatTheme.wallpaperId !== 'none' && chatTheme.wallpaperId !== 'custom') {
       vars['--chat-wallpaper'] = getWallpaperBackground(chatTheme.wallpaperId);
     }
@@ -5267,10 +6278,10 @@ useEffect(() => {
   const headerSubtitle = useMemo(() => {
     if (!selected) return null;
     if (selected.type === "group") {
-      if (groupTypingNames.length) {
-        return groupTypingNames.length === 1
-          ? `${groupTypingNames[0]} is typing…`
-          : `${groupTypingNames.slice(0, 2).join(", ")} typing…`;
+      if (groupTypingUsers.length) {
+        return groupTypingUsers.length === 1
+          ? `${groupTypingUsers[0].username} is typing…`
+          : `${groupTypingUsers.slice(0, 2).map(u => u.username).join(", ")} typing…`;
       }
       const group =
         selected.group ||
@@ -5294,7 +6305,7 @@ useEffect(() => {
     // Server already filtered presence by the peer's onlineStatus privacy.
     const presenceLabel = onlineUserIds.has(String(selected.id))
       ? "online"
-      : formatLastSeen(peer?.lastLoginAt);
+      : formatLastSeenLabel(peer?.lastLoginAt);
     const customStatus = (peer?.statusText || "").trim();
     if (customStatus) {
       return presenceLabel ? `${presenceLabel} · ${customStatus}` : customStatus;
@@ -5306,7 +6317,7 @@ useEffect(() => {
     resolveDmPeer,
     onlineUserIds,
     peerTyping,
-    groupTypingNames,
+    groupTypingUsers,
     aiBusy,
   ]);
 
@@ -5325,6 +6336,18 @@ useEffect(() => {
     return isGroupAdmin(activeGroup, user.id);
   }, [activeGroup, user.id]);
 
+  const iAmGroupAdmin = useMemo(
+    () => Boolean(activeGroup && isGroupAdmin(activeGroup, user.id)),
+    [activeGroup, user.id],
+  );
+
+  function mentionBlockReason(m) {
+    const policy = m.privacy?.groupMentions || "everyone";
+    if (policy === "nobody") return "mentions_off";
+    if (policy === "adminsOnly" && !iAmGroupAdmin) return "admins_only";
+    return null;
+  }
+
   const mentionSuggestions = useMemo(() => {
     if (!mentionOpen || !activeGroup) return [];
     const q = mentionQuery || "";
@@ -5336,7 +6359,8 @@ useEffect(() => {
         return !q || name.startsWith(q);
       })
       .slice(0, 6);
-  }, [mentionOpen, mentionQuery, activeGroup, user.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mentionOpen, mentionQuery, activeGroup, user.id, iAmGroupAdmin]);
 
   async function submitPollDraft(e) {
     e?.preventDefault?.();
@@ -5442,6 +6466,7 @@ useEffect(() => {
       applyConversationSelection(null);
     }
     setShowGroupSettings(false);
+    setShowCommandCenter(false);
     setProfileUserId(null);
   }
 
@@ -5449,11 +6474,9 @@ useEffect(() => {
     if (!selected || selected.type !== "dm") return false;
     if (selected.isSelfChat || String(selected.id) === String(user.id))
       return false;
-    const peer = resolveDmPeer(selected);
-    if (onlineUserIds.has(String(selected.id))) return true;
-    // Fallback only when socket presence hasn't arrived yet.
-    return isRecentlyActive(peer?.lastLoginAt);
-  }, [selected, resolveDmPeer, onlineUserIds, user.id]);
+    // Trust live presence only — lastLoginAt must not imply online.
+    return onlineUserIds.has(String(selected.id));
+  }, [selected, onlineUserIds, user.id]);
 
   const visibleMessages = useMemo(() => {
     const deleted = new Set(deletedForMeIds.map(String));
@@ -5518,7 +6541,7 @@ useEffect(() => {
         canChat={canChat}
         sidebarOpen={sidebarOpen}
         onCloseSidebar={() => setSidebarOpen(false)}
-       onSettings={() => {
+        onSettings={() => {
           setShowSettings(true);
           navigate("/chat/settings");
         }}
@@ -5540,7 +6563,11 @@ useEffect(() => {
         }}
         storiesRailRef={storiesRailRef}
         users={users}
-        onStoriesError={setError}
+        onStoriesError={(msg) => {
+          const text = String(msg || 'Something went wrong with your status');
+          setError(text);
+          showToast(text, 'error');
+        }}
         notifSettings={notifSettings}
         search={search}
         onSearchChange={setSearch}
@@ -5565,8 +6592,12 @@ useEffect(() => {
             // It will resync from server data on next login/session refresh.
           });
         }}
-       onArchive={(c) => {
+        onArchive={(c) => {
           setArchivedKeys(toggleArchiveChat(user.id, c.key));
+        }}
+        onPin={(c) => {
+          setPinnedChatKeys(togglePinChat(user.id, c.key));
+          showToast(c.pinned ? "Chat unpinned" : "Chat pinned", "info");
         }}
         onToggleVault={(c) => handleToggleVault(c.id)}
         loadingUsers={loadingUsers}
@@ -5607,10 +6638,10 @@ useEffect(() => {
           });
         }}
         onlineUserIds={onlineUserIds}
-       onOpenStarred={() => {
-  setStarredScope('all');
-  setShowStarredMessages(true);
-}}
+        onOpenStarred={() => {
+          setStarredScope('all');
+          setShowStarredMessages(true);
+        }}
       />
 
       <main
@@ -5643,7 +6674,15 @@ useEffect(() => {
             ? handleDrop
             : undefined
         }
+        style={selected ? themeStyle : undefined}
       >
+        {canChat && selected && themeStyle['--chat-wallpaper'] && (
+          <div
+            className="chat-wallpaper-layer"
+            data-wallpaper-fx={getWallpaperFx(chatTheme.wallpaperId) || undefined}
+            aria-hidden="true"
+          />
+        )}
         {!canChat && (
           <div className="key-unlock">
             <div className="key-unlock-card">
@@ -5886,7 +6925,14 @@ useEffect(() => {
                       </span>
                     )}
                     <div className="chat-header-text">
-                      <span className="chat-header-title">{title}</span>
+                      <span className="chat-header-title">
+                        {title}
+                        {screenshotProtectionOn ? (
+                          <span className="chat-screenshot-shield" title="Screenshot protection is active in this chat">
+                            Protected
+                          </span>
+                        ) : null}
+                      </span>
                       {headerSubtitle && (
                         <span
                           className={`chat-header-status ${headerOnline ? "status-online" : ""}`}
@@ -5908,7 +6954,7 @@ useEffect(() => {
                   selected?.peer?.systemRole !== "quantum_ai" && (
                     <>
 
-                     
+
                       <button
                         className="icon-btn"
                         type="button"
@@ -5972,14 +7018,24 @@ useEffect(() => {
                   <MessageSquare size={18} strokeWidth={2} aria-hidden="true" />
                 </button>
                 {selected?.type === "group" && (
-                  <button
-                    className="icon-btn chat-header-action-secondary"
-                    onClick={() => setShowGroupSettings(true)}
-                    title="Group settings"
-                    aria-label="Group settings"
-                  >
-                    <Settings2 size={18} strokeWidth={2} aria-hidden="true" />
-                  </button>
+                  <>
+                    <button
+                      className="icon-btn chat-header-action-secondary"
+                      onClick={() => setShowCommandCenter(true)}
+                      title="Command Center"
+                      aria-label="Command Center"
+                    >
+                      <LayoutDashboard size={18} strokeWidth={2} aria-hidden="true" />
+                    </button>
+                    <button
+                      className="icon-btn chat-header-action-secondary"
+                      onClick={() => setShowGroupSettings(true)}
+                      title="Group settings"
+                      aria-label="Group settings"
+                    >
+                      <Settings2 size={18} strokeWidth={2} aria-hidden="true" />
+                    </button>
+                  </>
                 )}
                 {selected && (
                   <button
@@ -6014,6 +7070,11 @@ useEffect(() => {
                         ? () => setShowGroupSettings(true)
                         : undefined
                     }
+                    onOpenCommandCenter={
+                      selected.type === "group"
+                        ? () => setShowCommandCenter(true)
+                        : undefined
+                    }
                     onToggleVault={
                       selected.type === "dm" && !selected.isSelfChat
                         ? () => handleToggleVault(selected.id)
@@ -6038,15 +7099,15 @@ useEffect(() => {
                       const request = wasMuted
                         ? unmuteChat(payload)
                         : muteChat({ ...payload, duration: "always" });
-                      request.catch(() => {});
+                      request.catch(() => { });
                     }}
                     onClearChat={handleClearChat}
                     onSearch={() => setSearchOpen(true)}
                     onWallpaper={
-                      selected.type === "dm" && !selected.isSelfChat
-                        ? () => setThemeModalOpen(true)
-                        : undefined
-                    }
+  selected.type === "group" || (selected.type === "dm" && !selected.isSelfChat)
+    ? () => setThemeModalOpen(true)
+    : undefined
+}
                     onStarred={() => {
                       setStarredScope("chat");
                       setShowStarredMessages(true);
@@ -6091,7 +7152,7 @@ useEffect(() => {
                       >
                         <Pin size={12} />
                         <span>
-                          {m.text ||
+                          {getMessagePreviewText(m) ||
                             (m.attachment ? "Attachment" : "Pinned message")}
                         </span>
                       </button>
@@ -6112,12 +7173,10 @@ useEffect(() => {
                     className="message-list"
                     ref={messageListRef}
                     onScroll={handleScroll}
-                    data-wallpaper-fx={getWallpaperFx(chatTheme.wallpaperId) || undefined}
                     initial={{ opacity: 0, x: 12 }}
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: -12 }}
                     transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-                    style={themeStyle}
                   >
                     {loadingOlder && (
                       <div className="load-older-hint">
@@ -6180,40 +7239,32 @@ useEffect(() => {
                           120000;
                         const mid = String(m.id || m._id);
 
-                       return (
-  <div
-    key={item.key}
-    id={`msg-${mid}`}
-    className="message-item"
-    onDoubleClick={() => {
-      // 1. Clear any edit state so we don't conflict
-      setEditingMessage(null);
-      // 2. Set the current message as the one we are replying to
-      setReplyTo(m);
-      // 3. Automatically put the user's cursor inside the text box!
-      textareaRef.current?.focus();
-    }}
-  >
-    <SwipeableMessage
+                        return (
+                          <div
+                            key={item.key}
+                            id={`msg-${mid}`}
+                            className="message-item"
+                          >
+                            <SwipeableMessage
                               message={m}
                               isMine={String(m.from) === String(user.id)}
                               onReply={(msg) => {
                                 setEditingMessage(null);
                                 setReplyTo(msg);
+                                textareaRef.current?.focus();
                               }}
                               onLongPress={(msg) => setActionSheetMessage(msg)}
                               onDoubleTap={(msg) => {
-                                const emoji = getLastQuickReaction();
-                                const mid = msg.id || msg._id;
-                                if (mid) {
-                                  setLastQuickReaction(emoji);
-                                  handleReactMessage(mid, emoji);
-                                }
+                                // Double-click / double-tap = reply only (not a quick reaction)
+                                setEditingMessage(null);
+                                setReplyTo(msg);
+                                textareaRef.current?.focus();
                               }}
                               currentUserId={user.id}
                               resolveSecretKey={resolveMySecretKey}
                               grouped={isGrouped}
                               starred={starredIds.map(String).includes(mid)}
+                              important={importantEntries.some((entry) => String(entry.id || entry._id) === mid)}
                               pinned={pinnedIds.map(String).includes(mid)}
                               showReadReceipts={
                                 user.privacy?.readReceipts !== false &&
@@ -6222,8 +7273,8 @@ useEffect(() => {
                               groupRecipientCount={
                                 isGroupChat && activeGroup?.members
                                   ? activeGroup.members.filter(
-                                      (gm) => String(gm._id || gm.id || gm) !== String(user.id),
-                                    ).length
+                                    (gm) => String(gm._id || gm.id || gm) !== String(user.id),
+                                  ).length
                                   : undefined
                               }
                               senderLabel={
@@ -6238,7 +7289,9 @@ useEffect(() => {
                                       usernameById.get(
                                         String(m.replyTo.from),
                                       ) || "Message",
-                                    text: m.replyTo.text || "[encrypted]",
+                                    text:
+                                      getMessagePreviewText(m.replyTo) ||
+                                      (m.replyTo.attachment ? "[Attachment]" : "[encrypted]"),
                                   }
                                   : null
                               }
@@ -6251,13 +7304,16 @@ useEffect(() => {
                               onCopy={handleCopyMessage}
                               onForward={setForwardMessage}
                               onStar={handleStarMessage}
+                              onImportant={handleImportantMessage}
                               onPin={handlePinMessage}
                               onVotePoll={
                                 isGroupChat ? handleVotePoll : undefined
                               }
                               onJumpToReply={handleJumpToReply}
-                                                            onImagePreview={handleImagePreview}
+                              onImagePreview={handleImagePreview}
                               onImageReady={handleImageReady}
+                              onVideoPreview={handleVideoPreview}
+                              onVideoReady={handleVideoReady}
                               onBurnViewOnce={handleBurnViewOnce}
                               onShowInfo={handleShowMessageInfo}
                               onShowEditHistory={handleShowEditHistory}
@@ -6279,15 +7335,16 @@ useEffect(() => {
                         );
                       })
                     )}
-                    <TypingIndicator
-                      isTyping={peerTyping && selected.type === "dm"}
-                      username={selected.title}
-                    />
+  <TypingIndicator
+  isTyping={peerTyping && selected.type === "dm"}
+  username={selected.title}
+  usernames={selected.type === "group" ? groupTypingUsers : []}
+  />
                     <div ref={bottomRef} />
                   </motion.div>
                 </AnimatePresence>
 
-               {hasUnread && (
+                {hasUnread && (
                   <button
                     className="scroll-bottom-pill"
                     onClick={() => scrollToBottom("smooth")}
@@ -6298,68 +7355,68 @@ useEffect(() => {
                   </button>
                 )}
 
-               {selected?.type === "dm" &&
-  !selected.isSelfChat &&
-  String(selected.id) !== String(user.id) &&
-  !selected.peer?.isSystemUser &&
-  (() => {
-    const vaultedLocked = !vaultUnlocked && isPeerVaulted(selected.id);
-    const isRealFriend = isFriendWith(selected.id);
+                {selected?.type === "dm" &&
+                  !selected.isSelfChat &&
+                  String(selected.id) !== String(user.id) &&
+                  !selected.peer?.isSystemUser &&
+                  (() => {
+                    const vaultedLocked = !vaultUnlocked && isPeerVaulted(selected.id);
+                    const isRealFriend = isFriendWith(selected.id);
 
-    if (!vaultedLocked && isRealFriend) return null;
+                    if (!vaultedLocked && isRealFriend) return null;
 
-    if (vaultedLocked) {
-      // Decoy view: always "not friends", regardless of the
-      // real relationship. Does NOT call the real
-      // friend-request API — clicking it must not mutate
-      // actual friend state while impersonating the locked
-      // decoy thread.
-      return (
-        <div className="composer-context" style={{ margin: "0 16px 8px" }}>
-          <div className="composer-context-copy">
-            <strong>Not friends yet</strong>
-            <span>Add {title} as a friend</span>
-          </div>
-          <button
-            type="button"
-            className="friend-action-btn add"
-            onClick={() => showToast("Friend request sent", "success")}
-          >
-            Add Friend
-          </button>
-        </div>
-      );
-    }
+                    if (vaultedLocked) {
+                      // Decoy view: always "not friends", regardless of the
+                      // real relationship. Does NOT call the real
+                      // friend-request API — clicking it must not mutate
+                      // actual friend state while impersonating the locked
+                      // decoy thread.
+                      return (
+                        <div className="composer-context" style={{ margin: "0 16px 8px" }}>
+                          <div className="composer-context-copy">
+                            <strong>Not friends yet</strong>
+                            <span>Add {title} as a friend</span>
+                          </div>
+                          <button
+                            type="button"
+                            className="friend-action-btn add"
+                            onClick={() => showToast("Friend request sent", "success")}
+                          >
+                            Add Friend
+                          </button>
+                        </div>
+                      );
+                    }
 
-    const pending = outgoingRequests.find(
-      (r) => String(r.user.id) === String(selected.id)
-    );
-    return (
-      <div className="composer-context" style={{ margin: "0 16px 8px" }}>
-        <div className="composer-context-copy">
-          <strong>Not friends yet</strong>
-          <span>Add {title} as a friend</span>
-        </div>
-        {pending ? (
-          <button
-            type="button"
-            className="friend-action-btn cancel"
-            onClick={() => handleCancelFriendRequest(pending.id)}
-          >
-            Cancel request
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="friend-action-btn add"
-            onClick={() => handleSendFriendRequest(selected.id)}
-          >
-            Add Friend
-          </button>
-        )}
-      </div>
-    );
-  })()}
+                    const pending = outgoingRequests.find(
+                      (r) => String(r.user.id) === String(selected.id)
+                    );
+                    return (
+                      <div className="composer-context" style={{ margin: "0 16px 8px" }}>
+                        <div className="composer-context-copy">
+                          <strong>Not friends yet</strong>
+                          <span>Add {title} as a friend</span>
+                        </div>
+                        {pending ? (
+                          <button
+                            type="button"
+                            className="friend-action-btn cancel"
+                            onClick={() => handleCancelFriendRequest(pending.id)}
+                          >
+                            Cancel request
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="friend-action-btn add"
+                            onClick={() => handleSendFriendRequest(selected.id)}
+                          >
+                            Add Friend
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                 {recording ? (
                   <div className="composer composer-recording">
@@ -6417,8 +7474,9 @@ useEffect(() => {
                           </strong>
                           <span>
                             {editingMessage
-                              ? editingMessage.text || ""
-                              : replyTo?.text || "[encrypted message]"}
+                              ? getMessagePreviewText(editingMessage) || ""
+                              : getMessagePreviewText(replyTo) ||
+                                (replyTo?.attachment ? "[Attachment]" : "[encrypted message]")}
                           </span>
                         </div>
                         <button
@@ -6461,23 +7519,48 @@ useEffect(() => {
                           gap: 4,
                         }}
                       >
-                        {mentionSuggestions.map((m) => (
-                          <button
-                            key={memberId(m)}
-                            type="button"
-                            className="composer-context-close"
-                            style={{
-                              width: "100%",
-                              justifyContent: "flex-start",
-                              borderRadius: 8,
-                              padding: "6px 10px",
-                              fontSize: 13,
-                            }}
-                            onClick={() => insertMention(m.username)}
-                          >
-                            @{m.username}
-                          </button>
-                        ))}
+                        {mentionSuggestions.map((m) => {
+                          const reason = mentionBlockReason(m);
+                          const blocked = Boolean(reason);
+                          return (
+                            <button
+                              key={memberId(m)}
+                              type="button"
+                              className="composer-context-close"
+                              style={{
+                                width: "100%",
+                                justifyContent: "space-between",
+                                display: "flex",
+                                alignItems: "center",
+                                borderRadius: 8,
+                                padding: "6px 10px",
+                                fontSize: 13,
+                                opacity: blocked ? 0.55 : 1,
+                                cursor: blocked ? "not-allowed" : "pointer",
+                              }}
+                              disabled={blocked}
+                              onClick={() => {
+                                if (blocked) return;
+                                insertMention(m.username);
+                              }}
+                            >
+                              <span>@{m.username}</span>
+                              {blocked && (
+                                <span
+                                  style={{
+                                    fontSize: 11,
+                                    fontWeight: 600,
+                                    color: "var(--warning-text, #fbbf24)",
+                                  }}
+                                >
+                                  {reason === "mentions_off"
+                                    ? "Mentions off"
+                                    : "Admins only"}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
                       </div>
                     )}
                     <div className="composer-tools-bar qc-composer-tools-slim">
@@ -6588,15 +7671,16 @@ useEffect(() => {
           </>
         )}
       </main>
-      {themeModalOpen && selected && (
-        <ChatThemeModal
-          peerId={selected.id}
-          theme={chatTheme}
-          catalog={themeCatalog}
-          onApplied={(updated) => setChatTheme(updated)}
-          onClose={() => setThemeModalOpen(false)}
-        />
-      )}
+      {themeModalOpen && selected && (selected.type === "dm" || selected.type === "group") && (
+  <ChatThemeModal
+    peerId={selected.type === "dm" ? selected.id : undefined}
+    groupId={selected.type === "group" ? selected.id : undefined}
+    theme={chatTheme}
+    catalog={themeCatalog}
+    onApplied={(updated) => setChatTheme(updated)}
+    onClose={() => setThemeModalOpen(false)}
+  />
+)}
 
       {aiPanelOpen && (
         <AIAssistantPanel
@@ -6621,6 +7705,16 @@ useEffect(() => {
         busy={confirmBusy}
         onCancel={closeConfirmDialog}
         onConfirm={handleConfirmDialog}
+      />
+
+      <ClearChatModal
+        open={clearChatOpen && Boolean(selected)}
+        busy={clearChatBusy}
+        hasStarredInChat={
+          selected ? getStarredEntries(user.id).some((e) => e.conversationKey === selected.key) : false
+        }
+        onCancel={() => !clearChatBusy && setClearChatOpen(false)}
+        onConfirm={executeClearChatScoped}
       />
 
       <CallOverlay
@@ -6699,8 +7793,8 @@ useEffect(() => {
             meetingCall.meeting
               ? [user?.id, ...Array.from(meetingCall.participants.keys())]
               : webrtc.call
-              ? [user?.id, webrtc.call.peerId]
-              : [user?.id]
+                ? [user?.id, webrtc.call.peerId]
+                : [user?.id]
           }
           onClose={() => setShowAddParticipantModal(false)}
           onAddParticipant={async (targetUser) => {
@@ -6735,16 +7829,40 @@ useEffect(() => {
       )}
 
       {showGroupSettings && activeGroup && (
-        <GroupSettingsModal
+  <GroupSettingsModal
+    group={activeGroup}
+    currentUserId={user.id}
+    users={users}
+    onClose={() => setShowGroupSettings(false)}
+    onUpdated={mergeUpdatedGroup}
+    onLeftOrDeleted={handleLeftOrDeletedGroup}
+    onOpenChatTheme={() => {
+      setShowGroupSettings(false);
+      setThemeModalOpen(true);
+    }}
+  />
+)}
+      {showCommandCenter && activeGroup && (
+        <GroupCommandCenter
           group={activeGroup}
+          messages={messages}
           currentUserId={user.id}
-          users={users}
-          onClose={() => setShowGroupSettings(false)}
+          onClose={() => setShowCommandCenter(false)}
           onUpdated={mergeUpdatedGroup}
-          onLeftOrDeleted={handleLeftOrDeletedGroup}
+          onJumpToMessage={(messageId) => setPendingJumpMessageId(String(messageId))}
+          onOpenGroupSettings={() => {
+            setShowCommandCenter(false);
+            setShowGroupSettings(true);
+          }}
+          onAskAiSummary={() => {
+            setDraft(
+              "@QuantumAI Please summarize this group: key announcements, open tasks, upcoming events, and recent decisions.",
+            );
+            setShowCommandCenter(false);
+            showToast("Review the draft, then send to ask QuantumAI", "info");
+          }}
         />
       )}
-
       {profileUserId && (
         <UserProfileModal
           userId={profileUserId}
@@ -6837,16 +7955,24 @@ useEffect(() => {
         />
       )}
       {showChatMedia && (
-  <ChatMediaModal
-    messages={visibleMessages}
-    imageSrcMap={imageSrcMapRef.current}
-    onImageClick={(id) => {
-      setShowChatMedia(false);
-      handleImagePreview(id);
-    }}
-    onClose={() => setShowChatMedia(false)}
-  />
-)}
+        <ChatMediaModal
+          messages={visibleMessages}
+          imageSrcMap={imageSrcMapRef.current}
+          videoSrcMap={videoSrcMapRef.current}
+          resolveSecretKey={resolveMySecretKey}
+          onImageReady={handleImageReady}
+          onVideoReady={handleVideoReady}
+          onImageClick={(id) => {
+            setShowChatMedia(false);
+            handleImagePreview(id);
+          }}
+          onVideoClick={(id) => {
+            setShowChatMedia(false);
+            handleVideoPreview(id);
+          }}
+          onClose={() => setShowChatMedia(false)}
+        />
+      )}
       {pollDraft && (
         <div
           className="create-group-overlay"
@@ -7037,7 +8163,7 @@ useEffect(() => {
         />
       )}
 
-     {forwardMessage && (
+      {forwardMessage && (
         <ForwardModal
           conversations={conversations}
           busy={forwardBusy}
@@ -7084,26 +8210,36 @@ useEffect(() => {
         />
       )}
       {showStarredMessages && (
-  <StarredMessagesModal
-    entries={
-      starredScope === 'chat' && selected
-        ? getStarredEntries(user.id).filter((e) => e.conversationKey === selected.key)
-        : getStarredEntries(user.id)
-    }
-    usernameById={usernameById}
-    currentUserId={user.id}
-    onSelect={handleOpenStarredEntry}
-    onUnstar={(id) => {
-      const nextIds = toggleStarredMessage(user.id, { id }, null);
-      setStarredIds(nextIds);
-      setExtrasTick((n) => n + 1);
-    }}
-    onClose={() => {
-      setShowStarredMessages(false);
-      setStarredScope('all');
-    }}
-  />
-)}
+        <StarredMessagesModal
+          entries={
+            (starredScope === 'chat' && selected
+              ? [...importantEntries, ...getStarredEntries(user.id)].filter((e) => e.conversationKey === selected.key)
+              : [...importantEntries, ...getStarredEntries(user.id)])
+          }
+          usernameById={usernameById}
+          currentUserId={user.id}
+          onSelect={handleOpenStarredEntry}
+          onCopy={(entry) => {
+            const text = entry?.text || (entry?.attachmentFilename ? `[${entry.attachmentFilename}]` : '');
+            if (!text) return;
+            navigator.clipboard?.writeText(text).then(
+              () => showToast('Copied to clipboard', 'success'),
+              () => showToast('Could not copy message', 'error'),
+            );
+          }}
+          onUnstar={(id) => {
+            const nextIds = toggleStarredMessage(user.id, { id }, null);
+            setStarredIds(nextIds);
+            setExtrasTick((n) => n + 1);
+          }}
+          onRemoveImportant={handleImportantMessage}
+          loading={importantLoading}
+          onClose={() => {
+            setShowStarredMessages(false);
+            setStarredScope('all');
+          }}
+        />
+      )}
       {messageInfoData && (
         <MessageInfoModal
           data={messageInfoData}
@@ -7113,7 +8249,7 @@ useEffect(() => {
           onClose={() => setMessageInfoData(null)}
         />
       )}
-            {editHistoryMessage && (
+      {editHistoryMessage && (
         <EditHistoryModal
           message={editHistoryMessage}
           currentUserId={user.id}
@@ -7144,6 +8280,15 @@ useEffect(() => {
         }}
       />
 
+      <TimeCapsuleModal
+  open={showCapsulePicker}
+  onCancel={() => setShowCapsulePicker(false)}
+  onConfirm={(iso) => {
+    setCapsuleUnlocksAt(iso);
+    setShowCapsulePicker(false);
+  }}
+/>
+
       <ImageLightbox
         isOpen={Boolean(gallery)}
         items={gallery?.items || []}
@@ -7153,6 +8298,32 @@ useEffect(() => {
         }
         onClose={() => setGallery(null)}
       />
+
+      {videoPlayer && (
+        <div
+          className="lightbox-overlay"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setVideoPlayer(null)}
+        >
+          <button
+            type="button"
+            className="lightbox-close"
+            onClick={() => setVideoPlayer(null)}
+            aria-label="Close"
+          >
+            ✕
+          </button>
+          <video
+            src={videoPlayer.src}
+            controls
+            autoPlay
+            playsInline
+            className="lightbox-image"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
 
       <MediaSendPreview
         open={Boolean(mediaPreview?.files?.length)}
@@ -7165,9 +8336,19 @@ useEffect(() => {
             prev ? { ...prev, viewOnce: !prev.viewOnce } : prev,
           )
         }
+        compress={Boolean(mediaPreview?.compress)}
+        onToggleCompress={() =>
+          setMediaPreview((prev) =>
+            prev ? { ...prev, compress: !prev.compress } : prev,
+          )
+        }
+        compressing={mediaCompressing}
+        compressProgress={mediaCompressProgress}
+        compressPhase={mediaCompressPhase}
         onSend={handleMediaPreviewSend}
-        onClose={() => !mediaPreviewSending && setMediaPreview(null)}
-        sending={mediaPreviewSending}
+        onSendAll={handleSendAllMedia}
+        onClose={() => !mediaPreviewSending && !mediaCompressing && setMediaPreview(null)}
+        sending={mediaPreviewSending || mediaCompressing}
       />
 
       <ComposerPlusSheet
@@ -7194,6 +8375,8 @@ useEffect(() => {
           const i = steps.indexOf(disappearSeconds);
           setDisappearSeconds(steps[(i + 1) % steps.length]);
         }}
+        onTimeCapsule={() => setShowCapsulePicker(true)}
+        capsuleActive={Boolean(capsuleUnlocksAt)}
         allowForward={allowForward}
         onToggleForward={() => setAllowForward((v) => !v)}
         forwardUntilSeconds={forwardUntilSeconds}
@@ -7203,33 +8386,33 @@ useEffect(() => {
           setForwardUntilSeconds(steps[(i + 1) % steps.length]);
         }}
       />
-<BottomSheet open={gifPickerOpen} onClose={() => setGifPickerOpen(false)} title="Send a GIF">
-  <div style={{ padding: '0 4px 8px' }}>
-    <input
-      type="text"
-      value={gifQuery}
-      onChange={(e) => setGifQuery(e.target.value)}
-      placeholder="Search GIFs"
-      autoFocus
-      style={{ width: '100%', padding: '8px 12px', borderRadius: 8, marginBottom: 10 }}
-    />
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, maxHeight: 320, overflow: 'auto' }}>
-      {gifLoading && <p className="empty-hint" style={{ gridColumn: '1 / -1' }}>Searching…</p>}
-      {!gifLoading && gifResults.length === 0 && <p className="empty-hint" style={{ gridColumn: '1 / -1' }}>No GIFs found</p>}
-      {gifResults.map((gif) => (
-        <button
-          key={gif.id}
-          type="button"
-          disabled={gifSending}
-          style={{ padding: 0, border: 0, borderRadius: 8, overflow: 'hidden', cursor: 'pointer' }}
-          onClick={() => sendGifMessage(gif.url)}
-        >
-          <img src={gif.previewUrl} alt="" style={{ width: '100%', height: 90, objectFit: 'cover', display: 'block' }} />
-        </button>
-      ))}
-    </div>
-  </div>
-</BottomSheet>
+      <BottomSheet open={gifPickerOpen} onClose={() => setGifPickerOpen(false)} title="Send a GIF">
+        <div style={{ padding: '0 4px 8px' }}>
+          <input
+            type="text"
+            value={gifQuery}
+            onChange={(e) => setGifQuery(e.target.value)}
+            placeholder="Search GIFs"
+            autoFocus
+            style={{ width: '100%', padding: '8px 12px', borderRadius: 8, marginBottom: 10 }}
+          />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, maxHeight: 320, overflow: 'auto' }}>
+            {gifLoading && <p className="empty-hint" style={{ gridColumn: '1 / -1' }}>Searching…</p>}
+            {!gifLoading && gifResults.length === 0 && <p className="empty-hint" style={{ gridColumn: '1 / -1' }}>No GIFs found</p>}
+            {gifResults.map((gif) => (
+              <button
+                key={gif.id}
+                type="button"
+                disabled={gifSending}
+                style={{ padding: 0, border: 0, borderRadius: 8, overflow: 'hidden', cursor: 'pointer' }}
+                onClick={() => sendGifMessage(gif.url)}
+              >
+                <img src={gif.previewUrl} alt="" style={{ width: '100%', height: 90, objectFit: 'cover', display: 'block' }} />
+              </button>
+            ))}
+          </div>
+        </div>
+      </BottomSheet>
       <MessageActionSheet
         open={Boolean(actionSheetMessage)}
         onClose={() => setActionSheetMessage(null)}
@@ -7246,6 +8429,13 @@ useEffect(() => {
               .includes(
                 String(actionSheetMessage.id || actionSheetMessage._id),
               )
+            : false
+        }
+        important={
+          actionSheetMessage
+            ? importantEntries.some(
+              (entry) => String(entry.id || entry._id) === String(actionSheetMessage.id || actionSheetMessage._id),
+            )
             : false
         }
         pinned={
@@ -7287,9 +8477,24 @@ useEffect(() => {
           handleDeleteMessage(msg?.id || msg?._id || msg)
         }
         onStar={(msg) => handleStarMessage(msg?.id || msg?._id || msg)}
+        onImportant={handleImportantMessage}
         onPin={(msg) => handlePinMessage(msg?.id || msg?._id || msg)}
         onShowInfo={handleShowMessageInfo}
       />
+
+      {capsuleUnlocksAt && (
+  <div className="capsule-picker-row">
+    <span>⏳ Unlocks {new Date(capsuleUnlocksAt).toLocaleString()}</span>
+    <button
+      type="button"
+      className="capsule-picker-close"
+      title="Cancel time capsule"
+      onClick={() => setCapsuleUnlocksAt("")}
+    >
+      <X size={16} />
+    </button>
+  </div>
+)}
 
       {!isCompactChrome && (
         <InfoPanel
@@ -7299,6 +8504,7 @@ useEffect(() => {
           users={users}
           onOpenProfile={setProfileUserId}
           onOpenGroupSettings={() => setShowGroupSettings(true)}
+          onOpenCommandCenter={() => setShowCommandCenter(true)}
         >
           {selected?.type === "dm" &&
             !selected.isSelfChat &&
@@ -7337,6 +8543,10 @@ useEffect(() => {
             onOpenGroupSettings={() => {
               closeInfoPanel();
               setShowGroupSettings(true);
+            }}
+            onOpenCommandCenter={() => {
+              closeInfoPanel();
+              setShowCommandCenter(true);
             }}
           >
             {selected?.type === "dm" &&

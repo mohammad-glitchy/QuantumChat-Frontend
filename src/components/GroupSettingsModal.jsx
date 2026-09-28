@@ -12,6 +12,7 @@ export default function GroupSettingsModal({
   onClose,
   onUpdated,
   onLeftOrDeleted,
+  onOpenChatTheme,
 }) {
   const [tab, setTab] = useState('info');
   const [name, setName] = useState(group?.name || '');
@@ -446,7 +447,21 @@ export default function GroupSettingsModal({
                   </p>
                 </div>
               </section>
-
+{onOpenChatTheme && (
+  <section className="gs-card">
+    <h3 className="gs-card-title">Chat theme</h3>
+    <p className="gs-card-copy">
+      Change the chat bubble color and wallpaper for this group. This only changes how it looks for you — other members keep their own.
+    </p>
+    <button
+      type="button"
+      className="btn-secondary gs-btn"
+      onClick={onOpenChatTheme}
+    >
+      Open chat theme
+    </button>
+  </section>
+)}
               {admin && group?.visibility === 'public' && (
                 <section className="gs-card">
                   <h3 className="gs-card-title">Join policy</h3>
@@ -467,7 +482,7 @@ export default function GroupSettingsModal({
                   </div>
                 </section>
               )}
-
+            
               {admin && (
                 <section className="gs-card">
                   <h3 className="gs-card-title">Permissions</h3>

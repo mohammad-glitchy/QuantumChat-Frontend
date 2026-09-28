@@ -96,7 +96,10 @@ export async function enablePushNotifications(opts = {}) {
   }
 
   try {
-    const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+   const registration = await navigator.serviceWorker.register('/sw.js', {
+  scope: '/',
+  updateViaCache: 'none',
+});
     await navigator.serviceWorker.ready;
 
     const vapidRes = await client.get('/users/me/push/vapid-public-key');

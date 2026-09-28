@@ -25,4 +25,13 @@ jobs:
         run: npm ci
 
       - name: npm audit (high+)
-        run: npm audit --omit=dev --audit-level=high
+        run: |
+          for i in 1 2 3; do
+            echo "Attempt $i of 3: running npm audit..."
+            if npm audit --omit=dev --audit-level=high; then
+              exit 0
+            fi
+            echo "npm audit failed. Retrying in 15s..."
+            sleep 15
+          done
+          exit 1

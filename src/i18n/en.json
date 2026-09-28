@@ -42,7 +42,7 @@
   },
   "nav": {
     "markAllRead": "Mark all as read",
-    "starredMessages": "Starred messages",
+    "starredMessages": "Important messages",
     "vault": "Key Vault",
     "setUpVault": "Set up vault",
     "lockVault": "Lock vault",
@@ -55,7 +55,8 @@
     "groups": "Groups",
     "allChats": "All Chats",
     "searchChats": "Search chats…",
-    "noConversations": "No conversations found"
+    "noConversations": "No conversations found",
+    "birthdays": "Birthday Calendar"
   },
   "settings": {
     "title": "Settings",
@@ -232,7 +233,7 @@
     "deleteForEveryone": "Delete for everyone",
     "searchInChat": "Search in chat",
     "chatMedia": "Chat media",
-    "starredMessages": "Starred messages",
+    "starredMessages": "Important messages",
     "wallpaper": "Wallpaper",
     "mute": "Mute",
     "unmute": "Unmute",

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import client from '../api/client.js';
 import { getDisplayName } from '../utils/getDisplayName.js';
+import { getMessagePreviewText } from '../utils/messagePreview.js';
 import UserAvatar from './UserAvatar.jsx';
 
 function formatTimestamp(iso) {
@@ -109,7 +110,7 @@ function ReplyRow({ reply, senderName, isMine, onClick }) {
         {isMine ? 'You' : senderName || 'Someone'}
       </div>
       <div className="message-info-reply-text">
-        {reply.text || '[attachment]'}
+        {getMessagePreviewText(reply) || (reply.attachment ? '[attachment]' : '[message]')}
       </div>
     </button>
   );

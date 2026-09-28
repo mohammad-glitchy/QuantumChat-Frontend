@@ -35,6 +35,10 @@ export async function getNotificationSettings() {
   const { data } = await client.get('/users/me/notification-settings');
   return data;
 }
+export async function lookupContactByPhone(phone) {
+  const { data } = await client.get('/users/lookup', { params: { phone } });
+  return data;
+}
 
 export async function updateNotificationSettings(payload) {
   const { data } = await client.put('/users/me/notification-settings', payload);
@@ -59,4 +63,15 @@ export async function clearChat(payload) {
   const { data } = await client.post('/users/me/clear-chat', payload);
   return data;
 }
+
+export async function getMyReferrals() {
+  const { data } = await client.get('/users/me/referrals');
+  return data;
+}
+
+export async function getReferralPreview(code) {
+  const { data } = await client.get(`/auth/referral-preview/${encodeURIComponent(code)}`);
+  return data;
+}
+
 export default client;

@@ -8,7 +8,7 @@ export function avatarUrlFor(userId) {
   return `/users/${userId}/avatar`;
 }
 
-export default function UserAvatar({ userId, name, hasAvatar, className = '', size = 'md' }) {
+export default function UserAvatar({ userId, name, hasAvatar, className = '', size = 'md', stackIndex }) {
   const [src, setSrc] = useState(() => (hasAvatar && userId ? cache.get(String(userId)) : null));
   const initials = (name || '?').slice(0, 2).toUpperCase();
 
@@ -41,13 +41,15 @@ export default function UserAvatar({ userId, name, hasAvatar, className = '', si
 
   const colorIndex = userId ? String(userId).split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % 10 : 0;
   const colorClass = src ? '' : `avatar-color-${colorIndex}`;
+  const extraStyle = stackIndex !== undefined ? { zIndex: 10 - stackIndex } : {};
 
   return (
-    <span className={`avatar user-avatar ${size} ${colorClass} ${className}`.trim()} title={name}>
+    <span className={`avatar user-avatar ${size} ${colorClass} ${className}`.trim()} title={name} style={extraStyle}>
       {src ? <img src={src} alt="" /> : initials}
     </span>
   );
 }
+
 
 export function bustAvatarCache(userId) {
   const key = String(userId);

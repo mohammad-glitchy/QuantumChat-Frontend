@@ -83,7 +83,7 @@ async function handlePush(event) {
   }
 
   const options = {
-    body: data.body || 'New notification',
+    body,
     icon: data.icon || '/logo.png',
     badge: data.badge || '/logo.png',
     data: data.data || { url: data.url || '/' },
