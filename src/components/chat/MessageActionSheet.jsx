@@ -28,9 +28,11 @@ export default function MessageActionSheet({
   onEdit,
   onDelete,
   onStar,
+  onImportant,
   onPin,
   onShowInfo,
   starred = false,
+  important = false,
   pinned = false,
   canEdit = false,
   canForward = true,
@@ -95,6 +97,11 @@ export default function MessageActionSheet({
           />{' '}
           {starred ? t('chat.unstar', 'Unstar') : t('chat.star', 'Star')}
         </button>
+        {onImportant ? (
+          <button type="button" role="menuitem" onClick={() => run(onImportant)}>
+            <Pin size={18} /> {important ? 'Remove from important' : 'Save as important'}
+          </button>
+        ) : null}
         <button type="button" role="menuitem" onClick={() => run(onPin)}>
           <Pin size={18} /> {pinned ? t('chat.unpin', 'Unpin') : t('chat.pin', 'Pin')}
         </button>

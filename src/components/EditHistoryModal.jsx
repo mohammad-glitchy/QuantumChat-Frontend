@@ -2,15 +2,17 @@ import { X } from 'lucide-react';
 import { useEffect, useMemo, useRef } from 'react';
 import { unsealMessage } from '../crypto/keys.js';
 
-// This modal always renders a light card, regardless of the app's active
-// theme — so it must NOT read global theme vars like --text-primary or
-// --modal-bg. On a dark theme those vars are set for light-on-dark text
-// and silently produce light-gray-on-white here. Hardcode instead.
-const MUTED_COLOR = '#8b8b8b';
-const TEXT_PRIMARY = '#1a1a1a';
-const TRACK_COLOR = 'rgba(0,0,0,0.08)';
-const CARD_BG = '#ffffff';
-const ACCENT = '#53bdeb';
+// Use theme design tokens so the modal responds gracefully to both light
+// and dark themes while meeting WCAG AA minimum contrast standards.
+const CARD_BG = 'var(--bg-surface, #fdf8ee)';
+const TEXT_PRIMARY = 'var(--text-primary, #1c2b23)';
+const MUTED_COLOR = 'var(--text-secondary, #4a5a4f)';
+const TRACK_COLOR = 'var(--border-subtle, #ecdfc0)';
+const ACCENT = 'var(--accent, #064e3b)';
+const CURRENT_BG = 'var(--accent-muted, rgba(6, 78, 59, 0.12))';
+const CURRENT_BORDER = 'color-mix(in srgb, var(--accent, #064e3b) 35%, transparent)';
+const EARLIER_BG = 'color-mix(in srgb, var(--text-primary, #000) 4%, transparent)';
+const CLOSE_BTN_BG = 'color-mix(in srgb, var(--text-primary, #000) 6%, transparent)';
 
 function formatTimestamp(iso) {
   if (!iso) return null;
@@ -112,7 +114,7 @@ export default function EditHistoryModal({ message, currentUserId, resolveSecret
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.45)',
+        background: 'rgba(0,0,0,0.55)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -127,6 +129,8 @@ export default function EditHistoryModal({ message, currentUserId, resolveSecret
         onClick={(e) => e.stopPropagation()}
         style={{
           background: CARD_BG,
+          color: TEXT_PRIMARY,
+          border: `1px solid ${TRACK_COLOR}`,
           borderRadius: 16,
           width: '100%',
           maxWidth: 380,
@@ -159,7 +163,7 @@ export default function EditHistoryModal({ message, currentUserId, resolveSecret
             onClick={onClose}
             aria-label="Close"
             style={{
-              background: 'rgba(0,0,0,0.05)',
+              background: CLOSE_BTN_BG,
               border: 'none',
               borderRadius: '50%',
               width: 30,
@@ -188,8 +192,8 @@ export default function EditHistoryModal({ message, currentUserId, resolveSecret
               style={{
                 padding: '10px 12px',
                 borderRadius: 10,
-                background: v.isCurrent ? 'rgba(83, 189, 235, 0.08)' : 'rgba(0,0,0,0.03)',
-                border: v.isCurrent ? `1px solid rgba(83, 189, 235, 0.3)` : 'none',
+                background: v.isCurrent ? CURRENT_BG : EARLIER_BG,
+                border: v.isCurrent ? `1px solid ${CURRENT_BORDER}` : 'none',
                 marginBottom: 8,
               }}
             >

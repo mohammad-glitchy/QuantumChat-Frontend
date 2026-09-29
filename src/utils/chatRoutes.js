@@ -30,7 +30,14 @@ export function selectionFromParams(params, conversations = []) {
       group: { id: groupId, members: [] },
     };
   }
-  if (peerId && peerId !== 'settings') {
+  // Ignore reserved /chat path segments and non-ObjectId junk so we never
+  // select a fake DM that triggers GET /messages/<word> → "Invalid user id".
+  const reservedPeer = new Set(['settings', 'activity', 'important', 'sync']);
+  if (
+    peerId &&
+    !reservedPeer.has(String(peerId)) &&
+    /^[a-f0-9]{24}$/i.test(String(peerId))
+  ) {
     const found = conversations.find(
       (c) => c.type === 'dm' && String(c.id) === String(peerId),
     );

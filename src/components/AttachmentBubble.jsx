@@ -1,8 +1,40 @@
 import { useEffect, useRef, useState } from 'react';
-import client from '../api/client.js';
-import { unsealBytes } from '../crypto/keys.js';
-import { attachmentIdOf, normalizeAttachment, pickAttachmentEnvelope } from '../crypto/voiceCache.js';
+import { createPortal } from 'react-dom';
+import {
+  attachmentIdOf,
+  normalizeAttachment,
+  pickAttachmentEnvelope,
+  resolveSealedAttachment,
+} from '../crypto/voiceCache.js';
 import { useNotificationSettings } from '../context/NotificationSettingsContext.jsx';
+import VoicePlayer from './VoicePlayer.jsx';
+
+function useInView(ref, { rootMargin = '120px', enabled = true } = {}) {
+  const [inView, setInView] = useState(!enabled);
+  useEffect(() => {
+    if (!enabled) {
+      setInView(true);
+      return undefined;
+    }
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      setInView(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setInView(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref, enabled, rootMargin]);
+  return inView;
+}
 
 function FileIcon({ className }) {
   return (
@@ -31,6 +63,43 @@ function DownloadIcon({ className }) {
       <polyline points="7 10 12 15 17 10" />
       <line x1="12" y1="15" x2="12" y2="3" />
     </svg>
+  );
+}
+
+function EyeIcon({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+// Compact document row: file tile · name + "EXT · size" meta.
+function DocHeader({ ext, filename, size, onIconClick, iconLabel }) {
+  const tile = (
+    <>
+      <FileIcon className="attachment-doc-tile-icon" />
+      <span className="attachment-doc-tile-ext">{ext}</span>
+    </>
+  );
+  return (
+    <div className="attachment-doc-header">
+      {onIconClick ? (
+        <button type="button" className="attachment-doc-tile" onClick={onIconClick} aria-label={iconLabel}>
+          {tile}
+        </button>
+      ) : (
+        <span className="attachment-doc-tile" aria-hidden="true">{tile}</span>
+      )}
+      <span className="attachment-doc-info">
+        <span className="attachment-doc-name" title={filename}>{filename}</span>
+        <span className="attachment-doc-meta">
+          {ext}
+          {size ? ` · ${formatFileSize(size)}` : ''}
+        </span>
+      </span>
+    </div>
   );
 }
 
@@ -78,12 +147,6 @@ function kindOf(attachment) {
   return 'file';
 }
 
-function formatDuration(seconds) {
-  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
-  const s = Math.floor(seconds);
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-}
-
 function formatFileSize(bytes) {
   if (!bytes) return '';
   if (bytes < 1024) return `${bytes} B`;
@@ -102,83 +165,6 @@ function typeLabel(kind) {
   return 'File';
 }
 
-function VoicePlayer({ url, onPlayedThrough }) {
-  const audioRef = useRef(null);
-  const [playing, setPlaying] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const burnedRef = useRef(false);
-
-  useEffect(() => {
-    return () => {
-      audioRef.current?.pause();
-    };
-  }, [url]);
-
-  function maybeBurn() {
-    if (burnedRef.current) return;
-    burnedRef.current = true;
-    onPlayedThrough?.();
-  }
-
-  async function togglePlay() {
-    const audio = audioRef.current;
-    if (!audio) return;
-    try {
-      if (audio.paused) {
-        await audio.play();
-        setPlaying(true);
-      } else {
-        audio.pause();
-        setPlaying(false);
-      }
-    } catch {
-      setPlaying(false);
-    }
-  }
-
-  return (
-    <div className="voice-player">
-      <audio
-        ref={audioRef}
-        src={url}
-        preload="metadata"
-        onLoadedMetadata={(e) => {
-          const d = e.currentTarget.duration;
-          setDuration(Number.isFinite(d) ? d : 0);
-        }}
-        onTimeUpdate={(e) => {
-          const a = e.currentTarget;
-          setProgress(a.duration ? a.currentTime / a.duration : 0);
-        }}
-        onEnded={() => {
-          setPlaying(false);
-          setProgress(0);
-          maybeBurn();
-        }}
-        onPause={() => setPlaying(false)}
-        onPlay={() => setPlaying(true)}
-      />
-      <button type="button" className="voice-play-btn" onClick={togglePlay} aria-label={playing ? 'Pause voice note' : 'Play voice note'}>
-        {playing ? (
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <rect x="6" y="5" width="4" height="14" rx="1" />
-            <rect x="14" y="5" width="4" height="14" rx="1" />
-          </svg>
-        ) : (
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <polygon points="6,4 20,12 6,20" />
-          </svg>
-        )}
-      </button>
-      <div className="voice-wave">
-        <div className="voice-wave-fill" style={{ width: `${Math.min(100, progress * 100)}%` }} />
-      </div>
-      <span className="voice-duration">{formatDuration(duration)}</span>
-    </div>
-  );
-}
-
 function triggerDownload(url, filename) {
   const a = document.createElement('a');
   a.href = url;
@@ -193,6 +179,8 @@ export default function AttachmentBubble({
   resolveAttachmentKey,
   onImagePreview,
   onImageReady,
+  onVideoPreview,
+  onVideoReady,
   viewOnce = false,
   viewOnceOpened = false,
   viewOnceMediaKind = null,
@@ -224,6 +212,28 @@ export default function AttachmentBubble({
       (kind === 'image' && imageAutoOk) ||
       (kind === 'video' && videoAutoOk));
 
+  const hostRef = useRef(null);
+  // Images/videos wait until near the viewport; audio/pdf/text load immediately.
+  const lazyKinds = kind === 'image' || kind === 'video';
+  const inView = useInView(hostRef, { enabled: lazyKinds && autoPreview });
+
+  function mimeForKind() {
+    return (
+      attachment.mimetype ||
+      (kind === 'audio'
+        ? 'audio/webm'
+        : kind === 'pdf'
+          ? 'application/pdf'
+          : kind === 'image'
+            ? 'image/jpeg'
+            : kind === 'video'
+              ? 'video/mp4'
+              : kind === 'text'
+                ? 'text/plain'
+                : 'application/octet-stream')
+    );
+  }
+
   async function burn() {
     if (burnedRef.current || !onBurnViewOnce) return;
     burnedRef.current = true;
@@ -234,21 +244,16 @@ export default function AttachmentBubble({
     }
   }
 
-  async function decryptToUrl() {
+  async function decryptToUrl(signal) {
     if (!attachmentId || !opened) throw new Error('Cannot decrypt');
-    const res = await client.get(`/attachments/${attachmentId}/raw`, { responseType: 'arraybuffer' });
-    const plainBytes = unsealBytes(new Uint8Array(res.data), opened.envelope, opened.secretKey);
-    if (!plainBytes) throw new Error('Decrypt failed');
-    const mime =
-      attachment.mimetype ||
-      (kind === 'audio'
-        ? 'audio/webm'
-        : kind === 'image'
-          ? 'image/jpeg'
-          : kind === 'video'
-            ? 'video/mp4'
-            : 'application/octet-stream');
-    return URL.createObjectURL(new Blob([plainBytes], { type: mime }));
+    const { url } = await resolveSealedAttachment({
+      attachmentId,
+      envelope: opened.envelope,
+      secretKey: opened.secretKey,
+      mime: mimeForKind(),
+      signal,
+    });
+    return url;
   }
 
   async function openViewOnce() {
@@ -256,10 +261,7 @@ export default function AttachmentBubble({
     setStatus('loading');
     try {
       const url = await decryptToUrl();
-      setObjectUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev);
-        return url;
-      });
+      setObjectUrl(url);
       setUnlocked(true);
       setStatus('idle');
       if (kind === 'image') {
@@ -276,63 +278,52 @@ export default function AttachmentBubble({
   }
 
   useEffect(() => {
-    let revoked = null;
     let cancelled = false;
+    const abortController = new AbortController();
 
     async function load() {
       if (!autoPreview || !attachmentId || !opened) return;
+      if (lazyKinds && !inView) return;
 
       setStatus('loading');
       try {
-        const res = await client.get(`/attachments/${attachmentId}/raw`, { responseType: 'arraybuffer' });
+        const { url, blob } = await resolveSealedAttachment({
+          attachmentId,
+          envelope: opened.envelope,
+          secretKey: opened.secretKey,
+          mime: mimeForKind(),
+          signal: abortController.signal,
+        });
         if (cancelled) return;
-        const plainBytes = unsealBytes(new Uint8Array(res.data), opened.envelope, opened.secretKey);
-        if (!plainBytes) {
-          setStatus('error');
-          return;
-        }
-
-        const mime =
-          attachment.mimetype ||
-          (kind === 'audio'
-            ? 'audio/webm'
-            : kind === 'pdf'
-              ? 'application/pdf'
-              : kind === 'image'
-                ? 'image/jpeg'
-                : kind === 'video'
-                  ? 'video/mp4'
-                  : kind === 'text'
-                    ? 'text/plain'
-                    : 'application/octet-stream');
 
         if (kind === 'text') {
-          const text = new TextDecoder().decode(plainBytes).slice(0, 4000);
+          const text = new TextDecoder().decode(await blob.arrayBuffer()).slice(0, 4000);
           setTextPreview(text);
-          const url = URL.createObjectURL(new Blob([plainBytes], { type: mime }));
-          revoked = url;
-          setObjectUrl(url);
-        } else {
-          const url = URL.createObjectURL(new Blob([plainBytes], { type: mime }));
-          revoked = url;
-          setObjectUrl(url);
-          if (kind === 'image' && onImageReady) {
-            onImageReady(attachmentId, url, attachment.filename);
-          }
+        }
+        setObjectUrl(url);
+        if (kind === 'image' && onImageReady) {
+          onImageReady(attachmentId, url, attachment.filename);
+        }
+        if (kind === 'video' && onVideoReady) {
+          onVideoReady(attachmentId, url, attachment.filename);
         }
         setStatus('idle');
-      } catch {
-        if (!cancelled) setStatus('error');
+      } catch (err) {
+        if (cancelled || err?.name === 'CanceledError' || err?.name === 'AbortError') return;
+        setStatus('error');
       }
     }
 
     load();
     return () => {
       cancelled = true;
-      if (revoked) URL.revokeObjectURL(revoked);
+      abortController.abort();
+      // Keep session-cached object URLs — gallery / remount reuse them.
     };
   }, [
     autoPreview,
+    inView,
+    lazyKinds,
     attachmentId,
     opened?.secretKey,
     opened?.envelope?.nonce,
@@ -345,18 +336,14 @@ export default function AttachmentBubble({
   async function handleManualOpen() {
     setStatus('loading');
     try {
-      const res = await client.get(`/attachments/${attachmentId}/raw`, { responseType: 'arraybuffer' });
-      const plainBytes = unsealBytes(new Uint8Array(res.data), opened.envelope, opened.secretKey);
-      if (!plainBytes) {
-        setStatus('error');
-        return;
-      }
-      const mime = attachment.mimetype || 'application/octet-stream';
-      const blob = new Blob([plainBytes], { type: mime });
-      const url = URL.createObjectURL(blob);
+      const { url } = await resolveSealedAttachment({
+        attachmentId,
+        envelope: opened.envelope,
+        secretKey: opened.secretKey,
+        mime: attachment.mimetype || 'application/octet-stream',
+      });
       setObjectUrl(url);
       triggerDownload(url, attachment.filename);
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
       setStatus('idle');
     } catch {
       setStatus('error');
@@ -504,25 +491,36 @@ export default function AttachmentBubble({
             Done · remove
           </button>
         </div>
-        {viewerOpen ? (
+        {/* Portal to body: the message list/bubbles are transformed (motion),
+            which would trap this position:fixed overlay inside the chat pane. */}
+        {viewerOpen ? createPortal(
           <div className="lightbox-overlay" role="dialog" aria-modal="true" onClick={closeViewOnceViewer}>
-            <button type="button" className="lightbox-close" onClick={closeViewOnceViewer} aria-label="Close">
+            <button
+              type="button"
+              className="lightbox-close"
+              onClick={(e) => {
+                e.stopPropagation();
+                closeViewOnceViewer();
+              }}
+              aria-label="Close"
+            >
               ✕
             </button>
             <img src={objectUrl} alt="View once photo" className="lightbox-image" onClick={(e) => e.stopPropagation()} />
-          </div>
+          </div>,
+          document.body,
         ) : null}
       </>
     );
   }
 
   if (kind === 'audio' && objectUrl) {
-    return <VoicePlayer url={objectUrl} />;
+    return <VoicePlayer url={objectUrl} onPlayedThrough={viewOnce ? onBurnViewOnce : undefined} isMine={isMine} />;
   }
 
   if (kind === 'image' && objectUrl) {
     return (
-      <div className="attachment-media">
+      <div ref={hostRef} className="attachment-media">
         <img
           className="attachment-preview"
           src={objectUrl}
@@ -549,7 +547,7 @@ export default function AttachmentBubble({
 
   if (kind === 'video' && objectUrl) {
     return (
-      <div className="attachment-media">
+      <div ref={hostRef} className="attachment-media">
         <video className="attachment-video" src={objectUrl} controls playsInline preload="metadata" />
         {!viewOnce && (
           <div className="attachment-media-actions">
@@ -567,32 +565,33 @@ export default function AttachmentBubble({
 
   if (kind === 'pdf' && objectUrl) {
     return (
-      <div className="attachment-doc">
-        <div className="attachment-doc-header">
-          <span className="attachment-type-badge">PDF</span>
-          <span className="attachment-filename-text">{attachment.filename}</span>
-          {attachment.size ? <span className="attachment-note">({formatFileSize(attachment.size)})</span> : null}
-        </div>
-        {pdfExpanded ? (
+      <div className={`attachment-doc${pdfExpanded ? ' is-expanded' : ''}`}>
+        <DocHeader
+          ext="PDF"
+          filename={attachment.filename}
+          size={attachment.size}
+          onIconClick={() => setPdfExpanded((v) => !v)}
+          iconLabel={pdfExpanded ? 'Hide PDF preview' : 'Preview PDF'}
+        />
+        {pdfExpanded && (
           <iframe
             className="attachment-pdf"
             src={objectUrl}
             title={attachment.filename}
             sandbox="allow-same-origin"
           />
-        ) : (
-          <button type="button" className="attachment-pdf-thumb" onClick={() => setPdfExpanded(true)}>
-            <FileIcon className="file-icon" />
-            <span>Preview PDF</span>
-          </button>
         )}
         <div className="attachment-doc-actions">
-          {!pdfExpanded && (
-            <button type="button" onClick={() => setPdfExpanded(true)}>
-              Preview
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setPdfExpanded((v) => !v)}
+            aria-expanded={pdfExpanded}
+          >
+            <EyeIcon className="attachment-doc-action-icon" />
+            {pdfExpanded ? 'Hide' : 'Preview'}
+          </button>
           <button type="button" onClick={handleDownload}>
+            <DownloadIcon className="attachment-doc-action-icon" />
             Download
           </button>
         </div>
@@ -603,13 +602,11 @@ export default function AttachmentBubble({
   if (kind === 'text' && (textPreview != null || objectUrl)) {
     return (
       <div className="attachment-doc">
-        <div className="attachment-doc-header">
-          <span className="attachment-type-badge">TXT</span>
-          <span className="attachment-filename-text">{attachment.filename}</span>
-        </div>
+        <DocHeader ext="TXT" filename={attachment.filename} size={attachment.size} />
         {textPreview != null && <pre className="attachment-text-preview">{textPreview}</pre>}
         <div className="attachment-doc-actions">
           <button type="button" onClick={handleDownload}>
+            <DownloadIcon className="attachment-doc-action-icon" />
             Download
           </button>
         </div>
@@ -617,10 +614,14 @@ export default function AttachmentBubble({
     );
   }
 
+  if (autoPreview && lazyKinds && !inView && !objectUrl) {
+    return <div ref={hostRef} className="skeleton attachment-preview-placeholder" aria-hidden="true" />;
+  }
+
   if (status === 'loading' && autoPreview) {
     if (kind === 'audio') {
       return (
-        <div className="attachment-chip attachment-chip-voice">
+        <div ref={hostRef} className="attachment-chip attachment-chip-voice">
           <span className="attachment-filename">
             <MicIcon className="file-icon" />
             <span>Decrypting voice note…</span>
@@ -628,7 +629,7 @@ export default function AttachmentBubble({
         </div>
       );
     }
-    return <div className="skeleton attachment-preview-placeholder" />;
+    return <div ref={hostRef} className="skeleton attachment-preview-placeholder" />;
   }
 
   if (status === 'error' && autoPreview) {

@@ -37,7 +37,8 @@ export default function ConversationPane({
   onBlock,
   onMute,
   onArchive,
-   onToggleVault,
+  onPin,
+  onToggleVault,
   loadingUsers,
     hasMoreContacts,
   onLoadMoreContacts,
@@ -127,6 +128,7 @@ export default function ConversationPane({
             onBlock={onBlock}
             onMute={onMute}
             onArchive={onArchive}
+            onPin={onPin}
             onToggleVault={onToggleVault}
             loading={loadingUsers}
             searchQuery={search}

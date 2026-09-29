@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import useFocusTrap from '../hooks/useFocusTrap.js';
 
-export default function CreateGroupModal({ users = [], onClose, onCreate }) {
+export default function CreateGroupModal({ users = [], currentUser, onClose, onCreate, onShareInvite }) {
   const [name, setName] = useState('');
   const [selected, setSelected] = useState(() => new Set());
   const [search, setSearch] = useState('');
@@ -10,7 +10,18 @@ export default function CreateGroupModal({ users = [], onClose, onCreate }) {
   const [joinPolicy, setJoinPolicy] = useState('open');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [blockedNote, setBlockedNote] = useState(null);
   const containerRef = useRef(null);
+  const myFriends = useMemo(
+    () => new Set((currentUser?.friends || []).map(String)),
+    [currentUser?.friends],
+  );
+
+  function blockReason(u) {
+    const policy = u.privacy?.whoCanCreateGroupsWithMe || 'everyone';
+    if (policy === 'friends' && !myFriends.has(String(u.id))) return 'friends_only';
+    return null;
+  }
 
   useFocusTrap(containerRef, true, { onEscape: () => !submitting && onClose?.() });
 
@@ -40,7 +51,12 @@ export default function CreateGroupModal({ users = [], onClose, onCreate }) {
     };
   }, [onClose, submitting]);
 
-  function toggle(id) {
+  function toggle(id, blocked) {
+    if (blocked) {
+      const u = people.find((p) => String(p.id) === id);
+      setBlockedNote(u?.username || 'This person');
+      return;
+    }
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -66,13 +82,17 @@ export default function CreateGroupModal({ users = [], onClose, onCreate }) {
       });
       onClose();
     } catch (err) {
-      setError(err.response?.data?.error || err.message || 'Failed to create group');
+      const data = err.response?.data;
+      setError(data?.error || err.message || 'Failed to create group');
+      if (data?.blockedUsers?.length) {
+        setBlockedNote(data.blockedUsers.map((b) => b.username).join(', '));
+      }
     } finally {
       setSubmitting(false);
     }
   }
 
-  const memberCount = selected.size + 1;
+  // const memberCount = selected.size + 1;
   const canSubmit = name.trim().length >= 2;
 
   const modal = (
@@ -221,23 +241,30 @@ export default function CreateGroupModal({ users = [], onClose, onCreate }) {
               {filtered.map((u) => {
                 const id = String(u.id);
                 const checked = selected.has(id);
+                const reason = blockReason(u);
+                const blocked = Boolean(reason);
                 return (
                   <label
                     key={id}
-                    className={`member-picker-item ${checked ? 'selected' : ''}`}
+                    className={`member-picker-item ${checked ? 'selected' : ''} ${blocked ? 'blocked' : ''}`}
                     role="option"
                     aria-selected={checked}
+                    aria-disabled={blocked}
                   >
                     <input
                       type="checkbox"
                       checked={checked}
-                      onChange={() => toggle(id)}
-                      disabled={submitting}
+                      onChange={() => toggle(id, blocked)}
+                      disabled={submitting || blocked}
                     />
                     <span className="avatar tiny">{(u.username || '?').slice(0, 2).toUpperCase()}</span>
                     <span className="member-picker-meta">
                       <span className="member-picker-name">{u.username}</span>
-                      {u.email && <span className="member-picker-email">{u.email}</span>}
+                      {blocked ? (
+                        <span className="member-picker-blocked-tag">Friends only · invite via link after creating</span>
+                      ) : u.email ? (
+                        <span className="member-picker-email">{u.email}</span>
+                      ) : null}
                     </span>
                     <span className={`member-check ${checked ? 'on' : ''}`} aria-hidden="true">
                       {checked ? (
@@ -259,6 +286,26 @@ export default function CreateGroupModal({ users = [], onClose, onCreate }) {
             </div>
           </div>
 
+          {blockedNote && (
+            <div className="create-group-blocked-note" role="status">
+              <span>
+                <strong>{blockedNote}</strong> can only be added by friends, or by joining via an invite link.
+              </span>
+              {onShareInvite && (
+                <button
+                  type="button"
+                  className="create-group-blocked-note-link"
+                  onClick={() => {
+                    setBlockedNote(null);
+                    onShareInvite();
+                  }}
+                >
+                  Create group, then share invite →
+                </button>
+              )}
+            </div>
+          )}
+
           {error && <div className="auth-error create-group-error">{error}</div>}
         </div>
 
@@ -272,7 +319,7 @@ export default function CreateGroupModal({ users = [], onClose, onCreate }) {
             Cancel
           </button>
           <button type="submit" className="confirm-btn primary" disabled={submitting || !canSubmit}>
-            {submitting ? 'Creating…' : `Create (${memberCount})`}
+            {submitting ? 'Creating…' : 'Create'}
           </button>
         </div>
       </form>

@@ -22,4 +22,13 @@ jobs:
         run: npm run test:crypto
       - run: npm run build
       - name: npm audit (critical)
-        run: npm audit --omit=dev --audit-level=critical
+        run: |
+          for i in 1 2 3; do
+            echo "Attempt $i of 3: running npm audit..."
+            if npm audit --omit=dev --audit-level=critical; then
+              exit 0
+            fi
+            echo "npm audit failed. Retrying in 15s..."
+            sleep 15
+          done
+          exit 1

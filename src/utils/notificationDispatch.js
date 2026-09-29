@@ -27,7 +27,7 @@ function isWithinDoNotDisturb(dnd) {
  *
  * kind: 'dm' | 'group' | 'status' | 'call'
  */
-export function shouldNotify(notifSettings, { kind, isMention = false } = {}) {
+export function shouldNotify(notifSettings, { kind, isMention = false, isAnnouncement = false } = {}) {
   if (!notifSettings) return true; // fail-open before settings load
   if (isWithinDoNotDisturb(notifSettings.doNotDisturb)) return false;
   if (notifSettings.priority === 'silent') return false;
@@ -36,7 +36,7 @@ export function shouldNotify(notifSettings, { kind, isMention = false } = {}) {
     const mode = notifSettings.groupNotifications;
     if (mode === 'off') return false;
     if (mode === 'mentions_only' && !isMention) return false;
-    if (mode === 'important_only' && !isMention) return false; // "important" = announcements/mentions for now
+    if (mode === 'important_only' && !isMention && !isAnnouncement) return false;
     return true;
   }
 
@@ -44,6 +44,10 @@ export function shouldNotify(notifSettings, { kind, isMention = false } = {}) {
     const mode = notifSettings.messageNotifications;
     if (mode === 'off') return false;
     return true; // 'all', 'direct_only', 'all_except_reactions' all permit DMs
+  }
+
+  if (kind === 'reaction') {
+    return notifSettings.messageNotifications !== 'all_except_reactions';
   }
 
   if (kind === 'status') {
@@ -99,6 +103,12 @@ export function describeSystemPayload(obj) {
       return `Reacted ${obj.emoji || '❤️'} to your story`;
     case 'story_reply':
       return `Replied to your story: "${(obj.text || '').slice(0, 80)}"`;
+    case 'announcement':
+      return obj.body ? `📢 ${obj.body}` : 'Announcement';
+    case 'poll':
+      return obj.question ? `📊 Poll: ${obj.question}` : 'Poll';
+    case 'event':
+      return obj.title ? `📅 Event: ${obj.title}` : 'Event';
     default:
       return null;
   }

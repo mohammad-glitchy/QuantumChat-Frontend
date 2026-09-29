@@ -1,0 +1,635 @@
+/* ================================================================
+   QUANTUMCHAT BIRTHDAY CALENDAR VIEW
+   Theme-aware, high-contrast, clean grid & cards
+   ================================================================ */
+
+.birthday-page {
+  position: relative;
+  isolation: isolate;
+  z-index: 2;
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 1.75rem 1.5rem 3.5rem;
+  color: var(--text-primary, #f1f5f9);
+  background-color: var(--bg-body, #0f1115);
+  background-image: 
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, #f43f5e 9%, transparent) 0%, transparent 55%),
+    radial-gradient(circle at 85% 15%, color-mix(in srgb, #ec4899 7%, transparent) 0%, transparent 45%);
+  background-repeat: no-repeat;
+  font-family: inherit;
+}
+
+.birthday-container {
+  max-width: 1160px;
+  margin: 0 auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+
+/* Header */
+.birthday-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  flex-wrap: wrap;
+}
+
+.birthday-header-left {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.birthday-back-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  background: var(--bg-surface, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+  color: var(--text-primary, #fff);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.birthday-back-btn:hover {
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.12));
+  transform: translateX(-2px);
+}
+
+.birthday-title-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.birthday-title {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  color: var(--text-primary, #ffffff);
+  letter-spacing: -0.02em;
+}
+
+.birthday-title-icon {
+  color: #f43f5e;
+}
+
+.birthday-subtitle {
+  margin: 0.25rem 0 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+}
+
+.birthday-today-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: color-mix(in srgb, #f43f5e 16%, transparent);
+  border: 1px solid color-mix(in srgb, #f43f5e 35%, transparent);
+  color: #fb7185;
+  font-size: 0.875rem;
+  font-weight: 600;
+  padding: 0.55rem 1.15rem;
+  border-radius: 9999px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.birthday-today-btn:hover {
+  background: color-mix(in srgb, #f43f5e 28%, transparent);
+  border-color: #f43f5e;
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+/* Two-column Layout */
+.birthday-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+}
+
+@media (min-width: 960px) {
+  .birthday-layout {
+    grid-template-columns: 1.5fr 1fr;
+    align-items: start;
+  }
+}
+
+/* Calendar Card */
+.birthday-calendar-card {
+  background: var(--bg-surface, #14171d);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 1.25rem;
+  padding: 1.5rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+/* Month Navigation */
+.birthday-month-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.birthday-current-month-display {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.birthday-month-name {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--text-primary, #ffffff);
+}
+
+.birthday-year-name {
+  font-size: 1.15rem;
+  font-weight: 500;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.5));
+}
+
+.birthday-nav-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.birthday-nav-arrow {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  color: var(--text-primary, #ffffff);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.birthday-nav-arrow:hover {
+  background: color-mix(in srgb, #f43f5e 20%, transparent);
+  border-color: #f43f5e;
+}
+
+/* Weekday Labels */
+.birthday-weekdays-row {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.45));
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+}
+
+/* Grid of Days */
+.birthday-days-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.4rem;
+}
+
+.birthday-day-cell {
+  position: relative;
+  min-height: 4.25rem;
+  border-radius: 0.75rem;
+  background: var(--bg-body, rgba(255, 255, 255, 0.02));
+  border: 1px solid transparent;
+  padding: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 0.25rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.birthday-day-cell:hover:not(.inactive) {
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.07));
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.birthday-day-cell.inactive {
+  opacity: 0.25;
+  cursor: default;
+}
+
+.birthday-day-cell.is-today {
+  border-color: #f43f5e;
+  background: color-mix(in srgb, #f43f5e 12%, transparent);
+}
+
+.birthday-day-cell.is-selected {
+  border-color: #ec4899;
+  background: color-mix(in srgb, #ec4899 22%, transparent);
+  box-shadow: 0 0 12px color-mix(in srgb, #ec4899 35%, transparent);
+}
+
+.birthday-day-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.birthday-day-number {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary, #ffffff);
+}
+
+.birthday-indicator-icon {
+  font-size: 0.85rem;
+}
+
+.birthday-badges-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-top: auto;
+}
+
+.birthday-friend-chip {
+  background: color-mix(in srgb, #f43f5e 25%, transparent);
+  border: 1px solid color-mix(in srgb, #f43f5e 50%, transparent);
+  border-radius: 0.35rem;
+  padding: 0.1rem 0.3rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.birthday-more-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: #fb7185;
+  text-align: right;
+  padding-right: 0.2rem;
+}
+
+/* Selected Date Inspector Card */
+.birthday-selected-date-card {
+  margin-top: 0.5rem;
+  padding: 1.15rem;
+  border-radius: 0.85rem;
+  background: var(--bg-body, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.selected-date-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.selected-date-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary, #ffffff);
+}
+
+.selected-count-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: color-mix(in srgb, #f43f5e 20%, transparent);
+  color: #fb7185;
+  padding: 0.2rem 0.6rem;
+  border-radius: 9999px;
+  border: 1px solid color-mix(in srgb, #f43f5e 40%, transparent);
+}
+
+.selected-date-empty {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.5));
+}
+
+.selected-friends-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.selected-friend-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 0.85rem;
+  border-radius: 0.65rem;
+  background: var(--bg-surface, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.selected-friend-item:hover {
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.08));
+  border-color: #f43f5e;
+}
+
+.selected-friend-avatar-wrap {
+  position: relative;
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.selected-friend-avatar,
+.selected-friend-avatar-fallback {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.selected-friend-avatar-fallback {
+  background: #f43f5e;
+  color: #fff;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+}
+
+.birthday-sparkle-dot {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  font-size: 0.75rem;
+}
+
+.selected-friend-info {
+  flex: 1;
+  margin-left: 0.75rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.selected-friend-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary, #ffffff);
+}
+
+.selected-friend-countdown {
+  font-size: 0.75rem;
+  color: #fb7185;
+}
+
+.selected-friend-chat-btn {
+  background: color-mix(in srgb, #f43f5e 20%, transparent);
+  border: 1px solid color-mix(in srgb, #f43f5e 40%, transparent);
+  color: #fff;
+  padding: 0.4rem 0.85rem;
+  border-radius: 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.selected-friend-chat-btn:hover {
+  background: #f43f5e;
+}
+
+/* Upcoming Sidebar (Right Column) */
+.birthday-upcoming-sidebar {
+  background: var(--bg-surface, #14171d);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 1.25rem;
+  padding: 1.5rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.upcoming-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.upcoming-title {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text-primary, #ffffff);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sparkle-icon {
+  color: #f59e0b;
+}
+
+.birthday-search-box {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  background: var(--bg-body, rgba(0, 0, 0, 0.25));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  border-radius: 0.65rem;
+  padding: 0.55rem 0.85rem;
+}
+
+.search-icon {
+  color: var(--text-secondary, rgba(255, 255, 255, 0.4));
+}
+
+.birthday-search-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary, #ffffff);
+  font-size: 0.875rem;
+  width: 100%;
+}
+
+.birthday-search-input::placeholder {
+  color: var(--text-secondary, rgba(255, 255, 255, 0.4));
+}
+
+.upcoming-groups-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.upcoming-category-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.upcoming-category-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.5));
+}
+
+.upcoming-category-title.today-highlight {
+  color: #f43f5e;
+}
+
+.upcoming-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 0.85rem;
+  border-radius: 0.65rem;
+  background: var(--bg-body, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.07));
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.upcoming-card:hover {
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.08));
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.upcoming-card.is-today {
+  background: color-mix(in srgb, #f43f5e 14%, transparent);
+  border-color: #f43f5e;
+}
+
+.upcoming-card.is-this-week {
+  background: color-mix(in srgb, #8b5cf6 12%, transparent);
+  border-color: color-mix(in srgb, #8b5cf6 35%, transparent);
+}
+
+.upcoming-card-avatar {
+  width: 2.25rem;
+  height: 2.25rem;
+  flex-shrink: 0;
+}
+
+.upcoming-card-avatar img,
+.upcoming-card-avatar .avatar-fallback {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.upcoming-card-avatar .avatar-fallback {
+  background: #f43f5e;
+  color: #fff;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+}
+
+.upcoming-card-content {
+  flex: 1;
+  margin: 0 0.75rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.upcoming-card-name {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary, #ffffff);
+}
+
+.upcoming-card-date {
+  font-size: 0.75rem;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.5));
+}
+
+.badge-today {
+  font-size: 0.7rem;
+  font-weight: 700;
+  background: #f43f5e;
+  color: #fff;
+  padding: 0.2rem 0.55rem;
+  border-radius: 9999px;
+  box-shadow: 0 0 8px rgba(244, 63, 94, 0.4);
+}
+
+.badge-countdown {
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.08));
+  color: var(--text-secondary, rgba(255, 255, 255, 0.8));
+  padding: 0.25rem 0.6rem;
+  border-radius: 9999px;
+}
+
+/* Loading & Empty States */
+.birthday-loading-state,
+.birthday-empty-state,
+.birthday-error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2.5rem 1.5rem;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+}
+
+.birthday-spinner {
+  width: 2rem;
+  height: 2rem;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-top-color: #f43f5e;
+  border-radius: 50%;
+  animation: bday-spin 0.8s linear infinite;
+  margin-bottom: 0.75rem;
+}
+
+@keyframes bday-spin {
+  to { transform: rotate(360deg); }
+}
+
+.empty-icon {
+  color: #f43f5e;
+  margin-bottom: 0.75rem;
+  opacity: 0.85;
+}
+
+.birthday-empty-state h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+  color: var(--text-primary, #ffffff);
+}
+
+.birthday-empty-state p {
+  margin: 0;
+  font-size: 0.85rem;
+  max-width: 280px;
+  line-height: 1.4;
+}

@@ -2,14 +2,15 @@ import { Archive, BadgeCheck, Ban, Cake, Clock, Flag, Lock, Sparkles, UserMinus,
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import client, { submitReport } from '../api/client.js';
-import UserAvatar from './UserAvatar.jsx';
 import { getDisplayName } from '../utils/getDisplayName.js';
+import { formatLastSeen } from '../utils/formatLastSeen.js';
 import {
   AI_BG_THEMES,
   readStoredAiBg,
   writeStoredAiBg,
 } from '../utils/aiPanelBg.js';
-
+import ProfileHighlights from './ProfileHighlights.jsx';
+import UserAvatar from './UserAvatar.jsx';
 
 const REPORT_REASONS = [
   { value: 'spam', label: 'Spam' },
@@ -38,7 +39,9 @@ export default function UserProfileModal({
 }) {
   const { t, i18n } = useTranslation();
   const closeRef = useRef(null);
-  const [profile, setProfile] = useState(seed);
+  // A seed can be stale or privacy-shaped. Public profile fields must come only
+  // from the authoritative user response, never from the chat list cache.
+  const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [aiBg, setAiBg] = useState(readStoredAiBg);
@@ -80,9 +83,7 @@ export default function UserProfileModal({
     let cancelled = false;
     setLoading(true);
     setError('');
-    if (seed && String(seed.id) === String(userId)) {
-      setProfile(seed);
-    }
+    setProfile(null);
 
     client
       .get(`/users/${userId}`)
@@ -114,10 +115,11 @@ export default function UserProfileModal({
     if (lastSeenSetting === 'nobody' || !p.lastLoginAt) {
       return { label: t('profile.lastSeenHidden', 'Last seen hidden'), online: false };
     }
+    const when = formatLastSeen(p.lastLoginAt, { prefix: '' });
     return {
       label: t('profile.lastSeenAt', {
-        time: new Date(p.lastLoginAt).toLocaleString(),
-        defaultValue: `Last seen ${new Date(p.lastLoginAt).toLocaleString()}`
+        time: when,
+        defaultValue: `Last seen ${when}`,
       }),
       online: false,
     };
@@ -148,6 +150,11 @@ export default function UserProfileModal({
   const statusText = (profile?.statusText || '').trim();
   const presence = formatPresence(profile, online);
   const keyRotated = formatKeyRotated(profile?.keyRotatedAt);
+  const birthday = typeof profile?.birthday === 'string' ? profile.birthday.trim() : '';
+  const birthdayLocked = profile?.birthdayLocked === true;
+  const birthdayLabel = birthday
+    ? new Date(birthday).toLocaleDateString(undefined, { month: 'long', day: 'numeric' })
+    : null;
   const isAi = profile?.systemRole === 'quantum_ai' || profile?.isSystemUser;
   const showActions = Boolean(profile && (onMute || onArchive || onHide || onBlock || onRemoveFriend) && !isAi);
 
@@ -222,6 +229,8 @@ export default function UserProfileModal({
           </div>
         ) : (
           <div className="user-profile-body">
+            <ProfileHighlights userId={profile?.id || userId} onError={setError} />
+
             {showActions && (
               <section className="user-profile-section">
                 <h3 className="user-profile-section-title">Chat actions</h3>
@@ -419,17 +428,27 @@ export default function UserProfileModal({
                     <span>{presence?.label || 'Hidden'}</span>
                   </span>
                 </li>
-                {profile?.birthday && (
+                {birthdayLabel ? (
                   <li className="user-profile-meta-row">
                     <span className="user-profile-meta-icon" aria-hidden="true">
                       <Cake size={16} strokeWidth={2} />
                     </span>
                     <span className="user-profile-meta-copy">
                       <strong>Birthday</strong>
-                      <span>{new Date(profile.birthday).toLocaleDateString(undefined, { month: 'long', day: 'numeric' })}</span>
+                      <span>{birthdayLabel}</span>
                     </span>
                   </li>
-                )}
+                ) : birthdayLocked ? (
+                  <li className="user-profile-meta-row">
+                    <span className="user-profile-meta-icon" aria-hidden="true">
+                      <Cake size={16} strokeWidth={2} />
+                    </span>
+                    <span className="user-profile-meta-copy">
+                      <strong>Birthday</strong>
+                      <span>Hidden</span>
+                    </span>
+                  </li>
+                ) : null}
                 <li className="user-profile-meta-row">
                   <span className="user-profile-meta-icon" aria-hidden="true">
                     <Lock size={16} strokeWidth={2} />

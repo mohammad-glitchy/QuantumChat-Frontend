@@ -1,3 +1,4 @@
+import { Lock, MessageSquare, Search, WifiOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 /**
@@ -36,10 +37,21 @@ export default function ChatEmptyState({
   };
 
   const preset = presets[variant] || presets.welcome;
+  const ICONS = {
+    welcome: MessageSquare,
+    locked: Lock,
+    offline: WifiOff,
+    noResults: Search,
+    thread: MessageSquare,
+  };
+  const IconComponent = ICONS[variant] || MessageSquare;
 
   return (
     <div className={`qc-empty-state qc-empty-state--${variant}`} role="status">
       <div className="qc-empty-state-card">
+        <div className="qc-empty-state-icon-wrap" aria-hidden="true">
+          <IconComponent size={24} strokeWidth={1.85} />
+        </div>
         <h2>{title || preset.title}</h2>
         <p>{copy || preset.copy}</p>
         {actionLabel && onAction ? (

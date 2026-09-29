@@ -1,5 +1,5 @@
 import { formatDistanceToNow } from 'date-fns';
-import { UserPlus, Users, AtSign, SmilePlus, Bell } from 'lucide-react';
+import { UserPlus, Users, AtSign, SmilePlus, Bell, ChevronRight } from 'lucide-react';
 
 const ICONS = {
   friend_request: UserPlus,
@@ -51,13 +51,14 @@ export default function ActivityItem({ item = {}, onOpen = () => {} }) {
       }}
     >
       <span className={`activity-item-icon ${iconClass}`} aria-hidden="true">
-        <Icon size={18} strokeWidth={2} />
+        <Icon size={18} strokeWidth={2.2} />
       </span>
       <div className="activity-item-main">
         <div className="activity-item-title">{title}</div>
-        {item.preview ? <div className="activity-item-preview muted">{item.preview}</div> : null}
+        {item.preview ? <div className="activity-item-preview">{item.preview}</div> : null}
         <div className="activity-item-meta">{when}</div>
       </div>
+      <ChevronRight size={16} className="activity-item-chevron" aria-hidden="true" />
     </div>
   );
 }

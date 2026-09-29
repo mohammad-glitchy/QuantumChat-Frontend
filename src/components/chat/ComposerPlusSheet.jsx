@@ -1,4 +1,4 @@
-import { Paperclip, Camera, BarChart2,Image as ImageIcon, Calendar, Megaphone, Clock, Forward, Smile } from 'lucide-react';
+import { BarChart2, Calendar, Camera, Clock, Forward, Hourglass, Image as ImageIcon, Megaphone, Paperclip, Smile } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import BottomSheet from '../ui/BottomSheet.jsx';
 
@@ -18,6 +18,8 @@ export default function ComposerPlusSheet({
   canAnnounce = false,
   disappearSeconds = 0,
   onCycleDisappear,
+  onTimeCapsule,        // ← new prop
+  capsuleActive = false, // ← new prop
   allowForward = true,
   onToggleForward,
   forwardUntilSeconds = 0,
@@ -63,6 +65,13 @@ export default function ComposerPlusSheet({
           <span>
             {t('composer.disappear', 'Disappear')}
             {disappearSeconds > 0 ? ` · ${disappearSeconds}s` : ` · ${t('composer.off', 'off')}`}
+          </span>
+        </button>
+        <button type="button" role="menuitem" className="qc-composer-plus-item" onClick={() => { onTimeCapsule?.(); onClose(); }}>
+          <Hourglass size={20} />
+          <span>
+            {t('composer.timeCapsule', 'Time capsule')}
+            {capsuleActive ? ` · set` : ''}
           </span>
         </button>
         <button type="button" role="menuitem" className="qc-composer-plus-item" onClick={() => onToggleForward?.()}>

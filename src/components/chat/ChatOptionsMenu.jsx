@@ -6,6 +6,7 @@ import {
   Eraser,
   Image as ImageIcon,
   Info,
+  LayoutDashboard,
   Lock,
   MessageSquare,
   MoreVertical,
@@ -58,6 +59,7 @@ export default function ChatOptionsMenu({
   onOpenAi,
   onOpenInfo,
   onOpenGroupSettings,
+  onOpenCommandCenter,
   compactExtras = false,
 }) {
   const { t } = useTranslation();
@@ -123,9 +125,19 @@ export default function ChatOptionsMenu({
                 <Info size={15} /> {t('chat.chatDetails', 'Chat details')}
               </button>
             ) : null}
+            {compactExtras && isGroup && onOpenCommandCenter ? (
+              <button type="button" role="menuitem" onClick={() => run(onOpenCommandCenter)}>
+                <LayoutDashboard size={15} /> Command Center
+              </button>
+            ) : null}
             {compactExtras && isGroup && onOpenGroupSettings ? (
               <button type="button" role="menuitem" onClick={() => run(onOpenGroupSettings)}>
                 <Settings2 size={15} /> {t('chat.groupSettings', 'Group settings')}
+              </button>
+            ) : null}
+            {!compactExtras && isGroup && onOpenCommandCenter ? (
+              <button type="button" role="menuitem" onClick={() => run(onOpenCommandCenter)}>
+                <LayoutDashboard size={15} /> Command Center
               </button>
             ) : null}
             <button type="button" role="menuitem" onClick={() => run(onSearch)}>
@@ -135,7 +147,7 @@ export default function ChatOptionsMenu({
               <ImageIcon size={15} /> {t('chat.chatMedia', 'Chat media')}
             </button>
             <button type="button" role="menuitem" onClick={() => run(onStarred)}>
-              <Star size={15} /> {t('chat.starredMessages', 'Starred messages')}
+              <Star size={15} /> {t('chat.starredMessages', 'Important messages')}
             </button>
             {onWallpaper && (
               <button type="button" role="menuitem" onClick={() => run(onWallpaper)}>

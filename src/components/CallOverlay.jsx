@@ -119,8 +119,8 @@ function injectPipStyles(doc) {
       margin: 0;
       width: 100%;
       height: 100%;
-      background: #0b1220;
-      color: #fff;
+      background: #0a2a1e;
+      color: #f8e7c9;
       font-family: system-ui, -apple-system, Segoe UI, sans-serif;
       overflow: hidden;
     }
@@ -130,7 +130,7 @@ function injectPipStyles(doc) {
       height: 100%;
       display: flex;
       flex-direction: column;
-      background: #0b1220;
+      background: #0a2a1e;
     }
     .pip-video {
       flex: 1;
@@ -199,7 +199,7 @@ function injectPipStyles(doc) {
       font-size: 42px;
       font-weight: 700;
       letter-spacing: 0.04em;
-      background: radial-gradient(circle at 30% 20%, #1e3a5f, #0b1220 70%);
+      background: radial-gradient(circle at 30% 20%, #12402f, #0a2a1e 70%);
     }
   `;
   doc.head.appendChild(style);

@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Archive, Ban, BellOff, Bookmark, Check, ChevronLeft, ChevronRight, Lock, Mail, MoreVertical, Phone, Search, Unlock, UserPlus, Users, UserX, VolumeX, X } from 'lucide-react';
+import { Archive, Ban, BellOff, Bookmark, Check, ChevronLeft, ChevronRight, Lock, Mail, MoreVertical, Phone, Pin, Search, Unlock, UserPlus, Users, UserX, VolumeX, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
@@ -7,11 +7,6 @@ import client from '../api/client.js';
 import { useVault } from '../context/VaultContext.jsx';
 import UserAvatar from './UserAvatar.jsx';
 import { getDisplayName } from '../utils/getDisplayName.js';
-
-function isRecentlyActive(iso) {
-  if (!iso) return false;
-  return Date.now() - new Date(iso).getTime() < 5 * 60 * 1000;
-}
 
 function formatShortRelative(iso) {
   if (!iso) return '';
@@ -87,6 +82,7 @@ export default function ConversationList({
   onBlock,
   onMute,
   onArchive,
+  onPin,
   onToggleVault,
   loading = false,
   searchQuery = '',
@@ -359,13 +355,18 @@ export default function ConversationList({
               hasAvatar={Boolean(c.peer?.hasAvatar)}
               className="conv-row-avatar"
             />
-            {(c.online ?? isRecentlyActive(c.lastLoginAt)) && <span className="online-dot" />}
+            {c.online && <span className="online-dot" />}
           </span>
         )}
       </span>
       <span className="user-list-meta">
         <span className="user-list-name-row">
           <span className="user-list-name">{c.title}</span>
+          {c.pinned && (
+            <span className="conv-pinned-icon" title="Pinned" aria-label="Pinned">
+              <Pin size={12} strokeWidth={2.2} aria-hidden="true" />
+            </span>
+          )}
           {c.muted && (
             <span className="conv-muted-icon" title="Muted" aria-label="Muted">
               <BellOff size={12} strokeWidth={2} aria-hidden="true" />
@@ -451,7 +452,7 @@ export default function ConversationList({
         );
       })()}
 
-      {(onHide || onBlock || onMute || onArchive) && (
+      {(onHide || onBlock || onMute || onArchive || onPin) && (
         <div className="conv-row-menu-wrap" onClick={(e) => e.stopPropagation()}>
           <button
             type="button"
@@ -487,6 +488,15 @@ export default function ConversationList({
                   }}
                 >
                   <div className="conv-row-dropdown-title">Conversation options</div>
+                  {onPin && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => runMenuAction(() => onPin(c))}
+                    >
+                      <Pin size={14} /> {c.pinned ? 'Unpin chat' : 'Pin chat'}
+                    </button>
+                  )}
                   {onMute && (
                     <button
                       type="button"

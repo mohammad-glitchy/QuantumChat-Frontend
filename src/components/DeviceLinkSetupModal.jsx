@@ -58,7 +58,7 @@ export default function DeviceLinkSetupModal({
             : statusText || 'Wait for the second device to scan this QR code.'}
         </p>
         {error ? (
-          <p className="settings-section-copy" style={{ color: 'var(--danger-color, #d45d5d)', marginTop: 8 }}>
+          <p className="settings-section-copy" style={{ color: 'var(--danger)', marginTop: 8 }}>
             {error}
           </p>
         ) : null}

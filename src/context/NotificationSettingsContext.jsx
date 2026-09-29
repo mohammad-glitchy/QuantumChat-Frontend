@@ -5,6 +5,7 @@ import { useAuth } from './AuthContext.jsx';
 const DEFAULT_SETTINGS = {
   messageNotifications: 'all',
   statusNotifications: 'all',
+  statusNotificationsSelectedFriends: [],
   soundEnabled: true,
   soundVolume: 80,
   messagePreview: 'full',

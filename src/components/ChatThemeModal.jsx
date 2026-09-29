@@ -6,20 +6,26 @@ import {
   resetChatTheme,
   saveChatTheme,
   uploadWallpaperImage,
+  fetchGroupWallpaperImageUrl,
+  removeGroupWallpaperImage,
+  resetGroupChatTheme,
+  saveGroupChatTheme,
+  uploadGroupWallpaperImage,
 } from '../api/chatThemes.js';
 import { getWallpaperThumbnail, preloadWallpaper } from '../theme/wallpaperBackgrounds.js';
 
-const MAX_WALLPAPER_BYTES = 10 * 1024 * 1024; // matches backend wallpaperUpload limit
+const MAX_WALLPAPER_BYTES = 10 * 1024 * 1024;
 
-// `theme` is the currently-applied { presetId, bubbleColorId, wallpaperId }
-// for this conversation (see Chat.jsx). `onApplied` receives the updated
-// theme object every time a change is saved, so the caller can update its
-// CSS variables immediately without waiting for a refetch.
-// `catalog` may be passed from Chat.jsx (already fetched once at login) so
-// the modal opens instantly instead of waiting on /chat-themes/presets again.
-export default function ChatThemeModal({ peerId, theme, catalog: catalogProp, onApplied, onClose }) {
+// Pass EITHER `peerId` (1:1 DM) OR `groupId` (group chat) — never both.
+// Everything else is identical; this is a personal display preference, so
+// each group member picks their own bubble/wallpaper independently, same
+// as DMs.
+export default function ChatThemeModal({ peerId, groupId, theme, catalog: catalogProp, onApplied, onClose }) {
+  const isGroup = Boolean(groupId);
+  const scopeId = groupId || peerId;
+
   const [catalog, setCatalog] = useState(catalogProp || null);
-  const [customizing, setCustomizing] = useState(null); // null | 'bubble' | 'wallpaper'
+  const [customizing, setCustomizing] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [customWallpaperUrl, setCustomWallpaperUrl] = useState(null);
@@ -43,10 +49,6 @@ export default function ChatThemeModal({ peerId, theme, catalog: catalogProp, on
     };
   }, [catalogProp]);
 
-  // Custom wallpaper bytes aren't public — fetch them as an authenticated
-  // blob (same pattern AttachmentBubble uses) and turn them into a local
-  // object URL. Revoke the previous URL whenever it's replaced or the
-  // conversation changes, so we don't leak blob URLs across theme switches.
   useEffect(() => {
     if (theme.wallpaperId !== 'custom') {
       setCustomWallpaperUrl(null);
@@ -54,7 +56,8 @@ export default function ChatThemeModal({ peerId, theme, catalog: catalogProp, on
     }
     let cancelled = false;
     let urlToRevoke = null;
-    fetchWallpaperImageUrl(peerId).then((url) => {
+    const fetchUrl = isGroup ? fetchGroupWallpaperImageUrl : fetchWallpaperImageUrl;
+    fetchUrl(scopeId).then((url) => {
       if (cancelled) {
         URL.revokeObjectURL(url);
         return;
@@ -66,7 +69,7 @@ export default function ChatThemeModal({ peerId, theme, catalog: catalogProp, on
       cancelled = true;
       if (urlToRevoke) URL.revokeObjectURL(urlToRevoke);
     };
-  }, [peerId, theme.wallpaperId, theme.updatedAt]);
+  }, [scopeId, isGroup, theme.wallpaperId, theme.updatedAt]);
 
   async function applyPreset(presetId) {
     setSaving(true);
@@ -74,7 +77,8 @@ export default function ChatThemeModal({ peerId, theme, catalog: catalogProp, on
     try {
       const preset = catalog?.presets?.find((p) => p.id === presetId);
       if (preset?.wallpaperId) preloadWallpaper(preset.wallpaperId);
-      const updated = await saveChatTheme(peerId, { presetId });
+      const save = isGroup ? saveGroupChatTheme : saveChatTheme;
+      const updated = await save(scopeId, { presetId });
       onApplied(updated);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to apply theme');
@@ -87,18 +91,14 @@ export default function ChatThemeModal({ peerId, theme, catalog: catalogProp, on
     setSaving(true);
     setError('');
     try {
-      // Only send the field being changed. Re-sending the *other* field
-      // unconditionally used to break as soon as a custom wallpaper was
-      // active: theme.wallpaperId would be 'custom', which the server
-      // rejects on this endpoint by design (it's only settable via the
-      // upload route), so every bubble-color click would 400 forever.
       const payload = {};
       if (nextBubbleColorId != null) payload.bubbleColorId = nextBubbleColorId;
       if (nextWallpaperId != null) {
         payload.wallpaperId = nextWallpaperId;
         preloadWallpaper(nextWallpaperId);
       }
-      const updated = await saveChatTheme(peerId, payload);
+      const save = isGroup ? saveGroupChatTheme : saveChatTheme;
+      const updated = await save(scopeId, payload);
       onApplied(updated);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to apply theme');
@@ -111,7 +111,8 @@ export default function ChatThemeModal({ peerId, theme, catalog: catalogProp, on
     setSaving(true);
     setError('');
     try {
-      const updated = await resetChatTheme(peerId);
+      const reset = isGroup ? resetGroupChatTheme : resetChatTheme;
+      const updated = await reset(scopeId);
       onApplied(updated);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to reset theme');
@@ -126,7 +127,7 @@ export default function ChatThemeModal({ peerId, theme, catalog: catalogProp, on
 
   async function handleFileChange(e) {
     const file = e.target.files?.[0];
-    e.target.value = ''; // allow re-selecting the same file later
+    e.target.value = '';
     if (!file) return;
 
     if (!file.type.startsWith('image/')) {
@@ -141,7 +142,8 @@ export default function ChatThemeModal({ peerId, theme, catalog: catalogProp, on
     setSaving(true);
     setError('');
     try {
-      const updated = await uploadWallpaperImage(peerId, file);
+      const upload = isGroup ? uploadGroupWallpaperImage : uploadWallpaperImage;
+      const updated = await upload(scopeId, file);
       onApplied(updated);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to upload wallpaper');
@@ -154,7 +156,8 @@ export default function ChatThemeModal({ peerId, theme, catalog: catalogProp, on
     setSaving(true);
     setError('');
     try {
-      const updated = await removeWallpaperImage(peerId);
+      const remove = isGroup ? removeGroupWallpaperImage : removeWallpaperImage;
+      const updated = await remove(scopeId);
       onApplied(updated);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to remove wallpaper');
@@ -179,7 +182,7 @@ export default function ChatThemeModal({ peerId, theme, catalog: catalogProp, on
     <div className="theme-modal-backdrop" onClick={onClose}>
       <div className="theme-modal" onClick={(e) => e.stopPropagation()}>
         <div className="theme-modal-header">
-          <span>Chat theme</span>
+          <span>{isGroup ? 'Group chat theme' : 'Chat theme'}</span>
           <button className="link-button" onClick={onClose}>
             Close
           </button>
@@ -209,7 +212,11 @@ export default function ChatThemeModal({ peerId, theme, catalog: catalogProp, on
             );
           })}
         </div>
-        <p className="theme-hint">The chat bubble and wallpaper will both change.</p>
+        <p className="theme-hint">
+          {isGroup
+            ? 'This changes how the group looks for you only — other members keep their own theme.'
+            : 'The chat bubble and wallpaper will both change.'}
+        </p>
 
         <p className="theme-section-label">Customize</p>
         <button

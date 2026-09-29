@@ -26,6 +26,10 @@ export function groupHasProtectedMember(group, viewerId, usersList = []) {
 
 /**
  * Whether the current viewer should enforce screenshot protection.
+ *
+ * Only the chat/profile of someone who enabled protection is protected.
+ * Enabling the setting on your account does NOT protect every chat you open —
+ * it protects *your* chats on other people's devices when they view you.
  */
 export function shouldEnforceScreenshotProtection({
   viewerId,
@@ -48,13 +52,14 @@ export function shouldEnforceScreenshotProtection({
   if (!selected) return false;
 
   if (selected.type === 'dm') {
+    // Your own / notes chat is never "someone else's protected chat".
     if (
       selected.isSelfChat ||
       String(selected.id) === String(viewerId)
     ) {
       return false;
     }
-    const peer = resolveDmPeer?.(selected);
+    const peer = resolveDmPeer?.(selected) || selected.peer;
     return userRequiresScreenshotProtection(peer);
   }
 

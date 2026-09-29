@@ -44,7 +44,7 @@ export async function updateFaviconBadge(showDot) {
       ctx.fillStyle = "#ef4444";
       ctx.fill();
       ctx.lineWidth = 2;
-      ctx.strokeStyle = "#0d1b2a";
+      ctx.strokeStyle = "#0f1115";
       ctx.stroke();
     }
 

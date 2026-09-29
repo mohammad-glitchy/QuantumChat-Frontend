@@ -63,3 +63,41 @@ export async function removeWallpaperImage(peerId) {
   const { data } = await client.delete(`/chat-themes/${peerId}/wallpaper`);
   return data.data;
 }
+
+
+
+// --- Group variants: same response shapes, scoped to /chat-themes/group/:groupId ---
+
+export async function fetchGroupChatTheme(groupId) {
+  const { data } = await client.get(`/chat-themes/group/${groupId}`);
+  return data.data;
+}
+
+export async function saveGroupChatTheme(groupId, payload) {
+  const { data } = await client.put(`/chat-themes/group/${groupId}`, payload);
+  return data.data;
+}
+
+export async function resetGroupChatTheme(groupId) {
+  const { data } = await client.delete(`/chat-themes/group/${groupId}`);
+  return data.data;
+}
+
+export async function uploadGroupWallpaperImage(groupId, file) {
+  const form = new FormData();
+  form.append('wallpaper', file);
+  const { data } = await client.post(`/chat-themes/group/${groupId}/wallpaper`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return data.data;
+}
+
+export async function fetchGroupWallpaperImageUrl(groupId) {
+  const res = await client.get(`/chat-themes/group/${groupId}/wallpaper`, { responseType: 'blob' });
+  return URL.createObjectURL(res.data);
+}
+
+export async function removeGroupWallpaperImage(groupId) {
+  const { data } = await client.delete(`/chat-themes/group/${groupId}/wallpaper`);
+  return data.data;
+}

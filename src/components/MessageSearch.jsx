@@ -4,6 +4,7 @@ import {
   resolveDateRange,
   searchMessages,
 } from '../utils/localSearchIndex.js';
+import { getMessagePreviewText } from '../utils/messagePreview.js';
 
 const TYPE_FILTERS = [
   { value: 'all', label: 'All' },
@@ -158,8 +159,8 @@ function MessageSearch({ messages = [], onResultSelect, isOpen, onClose }) {
       {(query.trim() || hasAnyFilter) && (
         <div className="message-search-results" role="listbox" aria-label="Search results">
           {results.length === 0 ? <div className="message-search-empty">No messages found</div> : results.map((msg) => (
-            <button key={msg.id} className="message-search-item" onClick={() => handleResultClick(msg.id)} type="button" role="option" aria-label={`Go to message: ${truncateText(msg.text, 40)}`}>
-              <span className="message-search-item-text">{truncateText(msg.text || msg.filename || (msg.isPicture ? 'Image' : 'Attachment'))}</span>
+            <button key={msg.id} className="message-search-item" onClick={() => handleResultClick(msg.id)} type="button" role="option" aria-label={`Go to message: ${truncateText(getMessagePreviewText(msg.text), 40)}`}>
+              <span className="message-search-item-text">{truncateText(getMessagePreviewText(msg.text) || msg.filename || (msg.isPicture ? 'Image' : 'Attachment'))}</span>
               {msg.filename && <span className="message-search-item-attachment">{msg.filename}</span>}
               {msg.timestamp && <span className="message-search-item-time">{formatTimestamp(msg.timestamp)}</span>}
             </button>

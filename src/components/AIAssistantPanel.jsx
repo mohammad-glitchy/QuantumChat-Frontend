@@ -122,10 +122,12 @@ export default function AIAssistantPanel({ conversation, messages, onClose, onIn
         message: prompt.trim(),
         context,
         ephemeral: true,
+        // Receipts must be signed for the logged-in QuantumChat user id.
+        // conversation.id is the peer/group — never use that as quantumChatPeerId.
         link:
           conversation?.type === 'group'
-            ? { groupId: conversation.id }
-            : { quantumChatPeerId: conversation?.id },
+            ? { groupId: conversation.id, quantumChatPeerId: user?.id }
+            : { quantumChatPeerId: user?.id },
         signal: controller.signal,
         onChunk: (chunk) => {
           // Buffer chunks and flush via rAF to prevent per-token re-renders

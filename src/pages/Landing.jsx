@@ -8,6 +8,7 @@ import {
   Menu,
   MessageSquare,
   Paperclip,
+  ScanLine,
   Shield,
   Sparkles,
   X,
@@ -198,6 +199,10 @@ export default function Landing() {
               </Link>
               <Link to="/login" className="landing-btn landing-btn-ghost landing-btn-lg">
                 Sign in
+              </Link>
+              <Link to="/link-device?scan=1" className="landing-btn landing-btn-ghost landing-btn-lg">
+                <ScanLine size={18} aria-hidden="true" />
+                Scan QR Code
               </Link>
             </motion.div>
             <motion.div

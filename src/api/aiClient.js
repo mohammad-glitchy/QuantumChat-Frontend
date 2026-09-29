@@ -61,21 +61,43 @@ export async function streamQuantumAI({
   onDone,
   ephemeral = false,
 }) {
-  const response = await fetch(`${AI_API_BASE}/ai/chat`, {
-    method: 'POST',
-    headers: headers(true),
-    signal,
-    body: JSON.stringify({
-      message,
-      conversationId: conversationId || undefined,
-      explicitContext: context?.length ? context : undefined,
-      sourceLink: link,
-      ephemeral,
-      stream: true,
-    }),
-  });
+  let response;
+  try {
+    response = await fetch(`${AI_API_BASE}/ai/chat`, {
+      method: 'POST',
+      headers: headers(true),
+      signal,
+      body: JSON.stringify({
+        message,
+        conversationId: conversationId || undefined,
+        explicitContext: context?.length ? context : undefined,
+        sourceLink: link,
+        ephemeral,
+        stream: true,
+      }),
+    });
+  } catch (err) {
+    if (err?.name === 'AbortError') throw err;
+    throw new Error(
+      'Cannot reach QuantumAI — the AI server may be down, or the browser blocked the response (CORS/CORP). Check https://ai.quantumlogicslimited.com/api/v1/health',
+    );
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
+    if (response.status === 401) {
+      throw new Error(
+        'QuantumAI login failed — JWT_SECRET on the AI server must match QuantumChat (re-login after fixing)',
+      );
+    }
+    if (response.status === 429) {
+      throw new Error('QuantumAI rate limit reached — try again in a few minutes');
+    }
+    if (response.status >= 500) {
+      throw new Error(
+        body.error ||
+          'QuantumAI server error — check GROQ_API_KEY and AI backend logs',
+      );
+    }
     throw new Error(body.error || `QuantumAI request failed (${response.status})`);
   }
   const reader = response.body?.getReader();

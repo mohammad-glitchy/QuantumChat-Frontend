@@ -5,9 +5,9 @@
   margin: 0.55rem 0.65rem 0;
   padding: 0.65rem 0.7rem;
   border-radius: 12px;
-  border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 35%, transparent);
-  background: color-mix(in srgb, var(--accent, #3b82f6) 12%, var(--panel, #0f172a));
-  color: var(--text, #e2e8f0);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border-subtle));
+  background: var(--accent-muted, rgba(20, 184, 166, 0.12));
+  color: var(--text-primary);
   flex-shrink: 0;
 }
 
@@ -17,8 +17,8 @@
   border-radius: 10px;
   display: grid;
   place-items: center;
-  background: color-mix(in srgb, var(--accent, #3b82f6) 22%, transparent);
-  color: var(--accent, #60a5fa);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent);
   flex-shrink: 0;
 }
 
@@ -34,14 +34,15 @@
 
 .notif-perm-banner-copy strong {
   font-size: 0.88rem;
+  color: var(--text-primary);
 }
 
 .notif-perm-banner-copy span {
-  color: color-mix(in srgb, var(--text, #e2e8f0) 75%, transparent);
+  color: var(--text-secondary);
 }
 
 .notif-perm-banner-error {
-  color: #f87171 !important;
+  color: var(--error, #ef4444) !important;
 }
 
 .notif-perm-banner-actions {
@@ -62,8 +63,8 @@
 }
 
 .notif-perm-btn.primary {
-  background: var(--accent, #3b82f6);
-  color: #fff;
+  background: var(--accent-solid, var(--accent));
+  color: var(--text-inverse);
 }
 
 .notif-perm-btn.primary:disabled {
@@ -73,14 +74,14 @@
 
 .notif-perm-btn.ghost {
   background: transparent;
-  color: color-mix(in srgb, var(--text, #e2e8f0) 70%, transparent);
+  color: var(--text-muted);
   padding: 0.4rem;
   display: grid;
   place-items: center;
 }
 
 .notif-perm-btn.ghost:hover {
-  color: var(--text, #e2e8f0);
+  color: var(--text-primary);
 }
 
 @media (max-width: 640px) {

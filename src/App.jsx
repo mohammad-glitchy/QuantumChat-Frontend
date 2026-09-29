@@ -12,6 +12,7 @@ import ResetPassword from './pages/ResetPassword.jsx';
 import VerifyEmail from './pages/VerifyEmail.jsx';
 import Chat from './pages/Chat.jsx';
 import Activity from './pages/Activity.jsx';
+import BirthdayCalendar from './pages/BirthdayCalendar.jsx';
 import JoinInvite from './components/JoinInvite.jsx';
 import Landing from './pages/Landing.jsx';
 import LinkDevice from './pages/LinkDevice.jsx';
@@ -51,6 +52,7 @@ export default function App() {
               />
               <Route path="/chat" element={<ProtectedChat />} />
               <Route path="/chat/activity" element={<ProtectedRoute><Activity /></ProtectedRoute>} />
+              <Route path="/chat/birthdays" element={<ProtectedRoute><BirthdayCalendar /></ProtectedRoute>} />
               <Route path="/chat/settings" element={<ProtectedChat />} />
               <Route path="/chat/settings/:tab" element={<ProtectedChat />} />
               <Route path="/chat/g/:groupId" element={<ProtectedChat />} />

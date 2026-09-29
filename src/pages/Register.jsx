@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import BrandLogo from '../components/BrandLogo.jsx';
 import PasswordStrengthMeter from '../components/PasswordStrengthMeter.jsx';
 import ThemeSwitcher from '../components/ThemeSwitcher.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
+import { getReferralPreview } from '../api/client.js';
 import { downloadKeyFile, formatKeyFile } from '../crypto/keyFile.js';
 import { SUPPORTED_LANGUAGES, setAppLanguage } from '../i18n/index.js';
 import { detectBrowserTimezone, getTimezoneList } from '../utils/timezones.js';
@@ -71,6 +72,9 @@ export default function Register() {
   const { t, i18n } = useTranslation();
   const { user, register } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [referralCode, setReferralCode] = useState('');
+  const [referralPreview, setReferralPreview] = useState(null);
   const [form, setForm] = useState({
     username: '',
     email: '',
@@ -81,6 +85,16 @@ export default function Register() {
   });
   const timezoneOptions = useState(getTimezoneList)[0];
   const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const ref = params.get('ref');
+    if (!ref) return;
+    setReferralCode(ref);
+    getReferralPreview(ref)
+      .then((res) => setReferralPreview(res.data))
+      .catch(() => setReferralPreview(null));
+  }, [location.search]);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [keyBackup, setKeyBackup] = useState(null);
@@ -128,7 +142,7 @@ export default function Register() {
     setLoading(true);
     try {
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const keys = await register({ ...form, timezone });
+      const keys = await register({ ...form, timezone, referralCode });
       setKeyBackup(keys);
     } catch (err) {
       const serverMsg = err.response?.data?.error;
@@ -156,6 +170,15 @@ export default function Register() {
         <p className="auth-subtitle">
           {t('auth.registerSubtitle', 'An end-to-end X25519 keypair is generated directly on your device. Your private key stays in your local browser cache and is never sent to our servers.')}
         </p>
+
+        {referralPreview && (
+          <div className="auth-notice" style={{ textAlign: 'center' }}>
+            <strong>
+              Invited by {referralPreview.displayName || `@${referralPreview.username}`}
+            </strong>
+            <p>You're joining QuantumChat through their invite link.</p>
+          </div>
+        )}
 
         <div className="auth-field">
           <svg className="auth-field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

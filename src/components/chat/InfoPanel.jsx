@@ -1,4 +1,4 @@
-import { Bookmark, Users, Info, X } from 'lucide-react';
+import { Bookmark, Users, Info, LayoutDashboard, X } from 'lucide-react';
 import UserAvatar from '../UserAvatar.jsx';
 import IconButton from '../ui/IconButton.jsx';
 
@@ -12,6 +12,7 @@ export default function InfoPanel({
   users = [],
   onOpenProfile,
   onOpenGroupSettings,
+  onOpenCommandCenter,
   children,
   embedded = false,
 }) {
@@ -49,9 +50,18 @@ export default function InfoPanel({
       </div>
       <div className="qc-info-actions">
         {isGroup ? (
-          <button type="button" className="qc-info-action" onClick={onOpenGroupSettings}>
-            <Info size={16} /> Group settings
-          </button>
+          <>
+            <button
+              type="button"
+              className="qc-info-action cc-info-action-primary"
+              onClick={onOpenCommandCenter}
+            >
+              <LayoutDashboard size={16} /> Command Center
+            </button>
+            <button type="button" className="qc-info-action" onClick={onOpenGroupSettings}>
+              <Info size={16} /> Group settings
+            </button>
+          </>
         ) : isSelfChat ? (
           <p className="qc-info-note">Encrypted notes only you can read on this account.</p>
         ) : (

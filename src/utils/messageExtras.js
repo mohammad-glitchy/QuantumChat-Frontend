@@ -41,6 +41,24 @@ function writeSet(userId, suffix, set) {
   localStorage.setItem(key(userId, suffix), JSON.stringify([...set]));
 }
 
+export function getAutoImportantRemovedIds(userId) {
+  return [...readSet(userId, 'auto-important-removed')];
+}
+
+export function rememberAutoImportantRemoval(userId, messageId) {
+  const set = readSet(userId, 'auto-important-removed');
+  set.add(String(messageId));
+  writeSet(userId, 'auto-important-removed', set);
+  return [...set];
+}
+
+export function clearAutoImportantRemoval(userId, messageId) {
+  const set = readSet(userId, 'auto-important-removed');
+  set.delete(String(messageId));
+  writeSet(userId, 'auto-important-removed', set);
+  return [...set];
+}
+
 export function getDeletedForMeIds(userId) {
   return [...readSet(userId, 'deleted-for-me')];
 }
@@ -57,6 +75,17 @@ export function isDeletedForMe(userId, messageId) {
 }
 
 
+export function clearAllStarred(userId) {
+  writeStarredEntries(userId, []);
+  return [];
+}
+
+/** Replace the full starred list (used to undo a clear). */
+export function restoreStarredEntries(userId, entries) {
+  const next = Array.isArray(entries) ? entries : [];
+  writeStarredEntries(userId, next);
+  return next.map((e) => e.id);
+}
 
 export function toggleStarredMessage(userId, message, conversation) {
   const id = String(message?.id || message?._id || message);
